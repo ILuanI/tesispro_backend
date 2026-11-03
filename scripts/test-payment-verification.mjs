@@ -1,4 +1,5 @@
 import { PaymentLegacyChecks1792910000000 } from '../dist/migrations/1792910000000-PaymentLegacyChecks.js';
+import { SuperAdminPayments1793000000000 } from '../dist/migrations/1793000000000-SuperAdminPayments.js';
 import 'reflect-metadata';
 import 'dotenv/config';
 import assert from 'node:assert/strict';
@@ -46,7 +47,7 @@ try {
       (f) =>
         f.endsWith('.js') &&
         !f.includes('1792900000000') &&
-        !f.includes('1792910000000'),
+        !f.includes('1792910000000') && !f.includes('1793000000000'),
     )
     .sort()) {
     const module = await import(
@@ -108,6 +109,7 @@ try {
   try {
     await new PaymentVerification1792900000000().up(runner);
     await new PaymentLegacyChecks1792910000000().up(runner);
+    await new SuperAdminPayments1793000000000().up(runner);
     await runner.commitTransaction();
   } catch (e) {
     await runner.rollbackTransaction();
@@ -228,7 +230,7 @@ try {
     await http('/admin/resumen', 'GET', undefined, 403, 'sales');
     await http('/admin/leads', 'GET', undefined, 403, 'sales');
     await http('/admin/pagos/catalogos', 'GET', undefined, 200, 'sales');
-    await http(`/admin/cuotas/${q}/abonos`, 'POST', payment('1.00'), 403);
+    await http('/admin/pagos/titulares', 'GET', undefined, 200);
     await http(
       '/auth/login',
       'POST',
@@ -268,6 +270,11 @@ try {
         )
       ).data;
       assert.equal(p1.estado, 'pendiente');
+      const [{ correo }] = await db.query('SELECT correo FROM lead WHERE id_lead=$1', [c.id_lead]);
+      const found = (await http(`/admin/pagos?estado=pendiente&q=${encodeURIComponent(correo)}`)).data;
+      assert.equal(found.total, 2);
+      assert.ok(found.items.some(p => p.idPago === p1.idPago));
+      assert.equal((await http('/admin/pagos?estado=pendiente&q=sin-coincidencia@example.test')).data.total, 0);
       assert.equal(
         (await http(`/admin/contratos/${c.id_contrato}/cronograma`)).data
           .cuotas[0].saldo,
@@ -435,7 +442,7 @@ try {
     );
   });
   await check(
-    'autoverificación bloqueada incluso tras cambiar de rol',
+    'el administrador puede decidir sobre un registro propio tras cambiar de rol',
     async () => {
       const p = (
         await http(
@@ -453,19 +460,13 @@ try {
       await http(
         `/admin/pagos/${p.idPago}/decision`,
         'POST',
-        decision(),
-        403,
+        decision('rechazado', 'Revisión por administrador'),
+        201,
         'sales',
       );
       await db.query(
         "UPDATE usuario_interno SET rol='asesor_comercial' WHERE id_usuario=$1",
         [users.sales],
-      );
-      await http(
-        `/admin/pagos/${p.idPago}/decision`,
-        'POST',
-        decision('rechazado', 'Registro de prueba'),
-        201,
       );
     },
   );
@@ -671,6 +672,26 @@ try {
       );
     },
   );
+  await check('administrador registra, confirma y rectifica su propio abono con auditoría', async () => {
+    const own = await contract();
+    const ownSchedule = await schedule(own);
+    const ownQuota = ownSchedule.cuotas[0].idCuota;
+    const p = (await http(`/admin/cuotas/${ownQuota}/abonos`, 'POST', payment('50.00'), 201)).data;
+    assert.equal(p.idUsuarioRegistro, users.admin);
+    await http(`/admin/pagos/${p.idPago}/decision`, 'POST', decision(), 201);
+    const confirmed = (await http(`/admin/pagos/${p.idPago}`)).data;
+    assert.equal(confirmed.estado, 'confirmado');
+    assert.equal(confirmed.idVerificador, users.admin);
+    const rect = (await http(`/admin/pagos/${p.idPago}/rectificaciones`, 'POST', {
+      motivo: 'Corrección por administrador', claveIdempotencia: randomUUID(),
+    }, 201)).data;
+    await http(`/admin/pagos/rectificaciones/${rect.idRectificacion}/decision`, 'POST', decision(), 201);
+    const after = (await http(`/admin/pagos/${p.idPago}`)).data;
+    assert.equal(after.aplicado, '0.00');
+    assert.ok(after.eventos.some(e => e.tipo === 'registro'));
+    assert.ok(after.eventos.some(e => e.tipo === 'confirmado'));
+    assert.ok(after.eventos.some(e => e.tipo === 'rectificacion_confirmado'));
+  });
   await check(
     'originales, eventos y comprobantes no se editan ni se borran',
     async () => {

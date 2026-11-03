@@ -177,7 +177,7 @@ export class AdminGuard implements CanActivate {
       return true;
     req.admin = await this.auth.authenticate(req);
     const roles=this.reflector.getAllAndOverride<string[]>('paymentRoles',[ctx.getHandler(),ctx.getClass()])??['administrador'];
-    if(!roles.includes(req.admin.rol)) throw new ForbiddenException('Tu rol no tiene acceso a esta operación.');
+    if(req.admin.rol !== 'administrador' && !roles.includes(req.admin.rol)) throw new ForbiddenException('Tu rol no tiene acceso a esta operación.');
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       this.auth.checkOrigin(req);
       const resource = req.path.split('/')[1];
