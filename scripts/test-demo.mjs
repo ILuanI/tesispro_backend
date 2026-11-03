@@ -1,3 +1,5 @@
+import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
 import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
 import 'reflect-metadata';
@@ -40,6 +42,8 @@ try {
       BuyerProfiles1792300000000,
       ResourceLibrary1792200000000,
       ResourceJourneys1792400000000,
+      LeadProfiling1792500000000,
+      TesiQualification1792600000000,
     ],
   });
   await db.initialize();

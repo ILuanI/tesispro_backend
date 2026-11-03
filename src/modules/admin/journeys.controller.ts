@@ -1,3 +1,5 @@
+import { CaptureProfileService, cookieToken } from './capture-profile.service.js';
+import { setContactCookie } from './lead-profile.controller.js';
 import {
   Body,
   Controller,
@@ -14,7 +16,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AuthService, Public } from './auth.js';
+import { AuthService, Public, type AdminRequest } from './auth.js';
 import { JourneysService } from './journeys.service.js';
 import {
   AttributionDto,
@@ -40,6 +42,7 @@ export class PublicResourcesController {
   constructor(
     private readonly service: JourneysService,
     private readonly auth: AuthService,
+    private readonly capture: CaptureProfileService,
   ) {}
   @Get() list() {
     return this.service.publicResources();
@@ -47,12 +50,17 @@ export class PublicResourcesController {
   @Get('acceso') state(@Req() req: Request) {
     return this.service.state(token(req));
   }
-  @Post('contacto') contact(
+  @Post('contacto') async contact(
     @Req() req: Request,
+    @Res({passthrough:true}) res:Response,
     @Body() dto: ResourceContactDto,
   ) {
     this.auth.checkOrigin(req);
-    return this.service.contact(token(req), dto);
+    const session=await this.capture.open(cookieToken(req.headers.cookie));
+    await this.service.contact(token(req), dto);
+    await this.capture.linkResource(session.token,token(req));
+    setContactCookie(res,session.token);
+    return {ok:true};
   }
   @Post('opciones') options(@Req() req: Request) {
     this.auth.checkOrigin(req);
@@ -148,7 +156,8 @@ export class JourneysAdminController {
   @Post('reuniones/:id/cancelar') cancel(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CancelMeetingDto,
+    @Req() req: AdminRequest,
   ) {
-    return this.service.cancel(id, dto.motivo);
+    return this.service.cancel(id, dto.motivo, req.admin.idUsuario);
   }
 }

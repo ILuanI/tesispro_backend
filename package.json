@@ -32,7 +32,8 @@
     "typeorm": "node node_modules/typeorm/cli.js",
     "migration:run": "pnpm build && pnpm typeorm migration:run -d dist/database/typeorm.config.js",
     "migration:revert": "pnpm build && pnpm typeorm migration:revert -d dist/database/typeorm.config.js",
-    "migration:show": "pnpm build && pnpm typeorm migration:show -d dist/database/typeorm.config.js"
+    "migration:show": "pnpm build && pnpm typeorm migration:show -d dist/database/typeorm.config.js",
+    "test:lead-profile": "pnpm build && node scripts/test-lead-profile.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

@@ -28,7 +28,8 @@ export const buyerReasons = [
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 export class BuyerDto {
-  @Transform(trim) @IsString() @MinLength(1) @MaxLength(100) nombres: string;
+  @IsOptional() @IsInt() @Min(1) revision?: number;
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(100) nombres?: string | null;
   @IsOptional() @Transform(trim) @IsString() @MaxLength(100) apellidos?:
     string | null;
   @Transform(({ value }) =>
@@ -38,7 +39,7 @@ export class BuyerDto {
   @IsEmail()
   @MaxLength(150)
   correo?: string | null;
-  @Transform(trim) @IsString() @Matches(/^\+?[\d ()-]{5,20}$/) telefono: string;
+  @IsOptional() @Transform(trim) @IsString() @Matches(/^\+?[\d ()-]{5,25}$/) telefono?: string | null;
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(/^\d{4}-\d{2}-\d{2}$/)

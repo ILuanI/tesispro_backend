@@ -1,3 +1,5 @@
+import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
 import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
 // Integration tests run only inside a newly created, isolated schema and remove it afterwards.
@@ -54,6 +56,8 @@ try {
       BuyerProfiles1792300000000,
       ResourceLibrary1792200000000,
       ResourceJourneys1792400000000,
+      LeadProfiling1792500000000,
+      TesiQualification1792600000000,
     ],
     synchronize: false,
   };
@@ -96,6 +100,7 @@ try {
   const base = await app.getUrl();
   let cookie = '';
   async function http(path, method = 'GET', body, custom = {}) {
+    if(method==='PATCH' && /^\/admin\/leads\/\d+$/.test(path) && body && body.revision===undefined && cookie) { const current=await fetch(base+path,{headers:{Cookie:cookie}}); if(current.ok)body={...body,revision:(await current.json()).revision}; }
     const res = await fetch(`${base}${path}`, {
       method,
       headers: {

@@ -23,7 +23,7 @@ export class RecursoGratuito {
   @Column({ type: 'varchar', length: 40, default: 'material_propio' })
   categoria: string;
 
-  @Column({ type: 'varchar', length: 10, default: 'pdf' })
+  @Column({ type: 'varchar', length: 20, default: 'pdf' })
   formato: string;
 
   @Column({ name: 'fecha_creacion', type: 'timestamptz', default: () => 'now()' })

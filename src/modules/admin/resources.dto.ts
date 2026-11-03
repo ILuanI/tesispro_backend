@@ -22,12 +22,14 @@ export const resourceCategories = [
   },
   { value: 'guias_universitarias', label: 'Guías universitarias' },
   { value: 'material_propio', label: 'Material propio' },
+  { value: 'elaboracion_tesis', label: 'Elaboración de tesis' },
 ];
 export const resourceFormats = [
   { value: 'pdf', label: 'PDF' },
   { value: 'word', label: 'Word' },
   { value: 'video', label: 'Video' },
   { value: 'png', label: 'PNG' },
+  { value: 'orientativo', label: 'Contenido orientativo' },
 ];
 const trimmed = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;

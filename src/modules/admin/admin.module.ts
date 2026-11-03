@@ -1,3 +1,8 @@
+import { ContactIdentityService } from './contact-identity.service.js';
+import { TesiQualificationService } from './tesi-qualification.service.js';
+import { LeadProfileService } from './lead-profile.service.js';
+import { CaptureProfileService } from './capture-profile.service.js';
+import { LeadProfileController, CaptureProfileController, TesiProfileController } from './lead-profile.controller.js';
 import { ArgumentsHost, Catch, ExceptionFilter, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { QueryFailedError } from 'typeorm';
@@ -52,6 +57,7 @@ class DatabaseErrorFilter implements ExceptionFilter {
 @Module({
   controllers: [
     AuthController,
+    LeadProfileController, CaptureProfileController, TesiProfileController,
     AdminController,
     ContractsController,
     ResourcesController,
@@ -63,6 +69,7 @@ class DatabaseErrorFilter implements ExceptionFilter {
   ],
   providers: [
     AuthService,
+    ContactIdentityService, LeadProfileService, CaptureProfileService, TesiQualificationService,
     AdminService,
     ContractsService,
     ResourcesService,

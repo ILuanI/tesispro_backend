@@ -180,6 +180,7 @@ export class AdminGuard implements CanActivate {
       const resource = req.path.split('/')[1];
       if (
         [
+          'perfil-academico','perfil-laboral','proyecto-tesis','proyecto-necesidad','conversacion','mensaje','seguimiento','sesion-landing','descarga-recurso','derivacion-humana',
           'lead',
           'lead-estado-historial',
           'pago',

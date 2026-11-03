@@ -19,8 +19,8 @@ export class Lead {
   @Column({ name: 'id_responsable', nullable: true })
   idResponsable: number | null;
 
-  @Column({ type: 'varchar', length: 100 })
-  nombres: string;
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  nombres: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   apellidos: string | null;
@@ -31,8 +31,8 @@ export class Lead {
   @Column({name:'reserva_pendiente',type:'boolean',default:false})
   reservaPendiente: boolean;
 
-  @Column({ type: 'varchar', length: 20 })
-  telefono: string;
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  telefono: string | null;
 
   @Column({ name: 'fecha_nacimiento', type: 'date', nullable: true })
   fechaNacimiento: string | null;

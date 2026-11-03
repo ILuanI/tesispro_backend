@@ -1,3 +1,5 @@
+import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
 // HTTP y PostgreSQL reales; todos los datos se aíslan en un esquema temporal.
 import 'reflect-metadata';
@@ -55,6 +57,8 @@ try {
       ResourceLibrary1792200000000,
       BuyerProfiles1792300000000,
       ResourceJourneys1792400000000,
+      LeadProfiling1792500000000,
+      TesiQualification1792600000000,
     ],
   };
   db = new DataSource(options);
@@ -138,8 +142,8 @@ try {
     },
   );
   const catalogs = await expect(`${root}/catalogos`);
-  assert.equal(catalogs.categorias.length, 4);
-  assert.equal(catalogs.formatos.length, 4);
+  assert.equal(catalogs.categorias.length, 5);
+  assert.equal(catalogs.formatos.length, 5);
   let first;
   await check(
     'Crear las cuatro categorías y formatos y recuperar el detalle',
@@ -356,9 +360,13 @@ try {
       await expect(`${root}/${uploaded.idRecurso}`, 'GET', undefined, 404);
     },
   );
+  await check('Categoria de tesis y contenido orientativo enlazado', async () => {
+    const saved=await expect(root,'POST',{...dto,titulo:'Contenido orientativo',categoria:'elaboracion_tesis',formato:'orientativo'},201);
+    assert.equal((await expect(`${root}/${saved.idRecurso}`)).formato,'orientativo');
+  });
   if (process.env.RESOURCES_UI_TARGET) {
     const requireFrontend = createRequire(
-      new URL('../../tesispro_frontend/package.json', import.meta.url),
+      new URL('../../tesispro-landing/package.json', import.meta.url),
     );
     const { chromium, expect: uiExpect } = requireFrontend('@playwright/test');
     const target = new URL(process.env.RESOURCES_UI_TARGET),

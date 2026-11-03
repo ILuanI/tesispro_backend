@@ -1,3 +1,4 @@
+import { ContactIdentityService, normalizeContactPhone } from './contact-identity.service.js';
 import {
   BadRequestException,
   ConflictException,
@@ -27,15 +28,7 @@ const camel = (r: Row) =>
   );
 const digest = (value: string) =>
   createHash('sha256').update(value).digest('hex');
-export function normalizeContactPhone(value: string) {
-  let digits = value.replace(/\D/g, '');
-  if (digits.length === 9) digits = '51' + digits;
-  if (!/^[1-9]\d{7,14}$/.test(digits))
-    throw new BadRequestException(
-      'Ingresa un teléfono válido con código de país.',
-    );
-  return '+' + digits;
-}
+export { normalizeContactPhone } from './contact-identity.service.js';
 const phoneSql = (column: string) =>
   `CASE WHEN length(regexp_replace(${column},'[^0-9]','','g'))=9 THEN '51'||regexp_replace(${column},'[^0-9]','','g') ELSE regexp_replace(${column},'[^0-9]','','g') END`;
 const limaDay = (time = Date.now()) =>
@@ -48,7 +41,7 @@ const published = `activo=true AND publicado=true`;
 
 @Injectable()
 export class JourneysService {
-  constructor(private readonly db: DataSource) {}
+  constructor(private readonly db: DataSource, private readonly identity: ContactIdentityService) {}
   async publicResources() {
     return this.db.query(
       `SELECT id_recurso AS "idRecurso",titulo,descripcion,categoria,formato FROM recurso_gratuito WHERE ${published} AND destacado=true ORDER BY fecha_actualizacion DESC,id_recurso DESC`,
@@ -213,38 +206,12 @@ export class JourneysService {
     return this.db.transaction(async (m) => {
       const s = await this.access(m, token);
       if (s.formulario_completado) return { ok: true };
-      const telefono = normalizeContactPhone(dto.telefono),
-        digits = telefono.slice(1);
-      await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
-        telefono,
-      ]);
-      const leads = await m.query(
-        `SELECT id_lead FROM lead WHERE ${phoneSql('telefono')}=$1 ORDER BY id_lead LIMIT 2`,
-        [digits],
-      );
-      if (leads.length > 1)
-        throw new ConflictException(
-          'Hay varios perfiles con este teléfono. Comunícate con un asesor.',
-        );
-      let leadId = leads[0]?.id_lead || null,
-        buyerId = null;
-      const buyers = await m.query(
-        `SELECT * FROM buyer WHERE ${phoneSql('telefono')}=$1 ORDER BY id_buyer LIMIT 2 FOR UPDATE`,
-        [digits],
-      );
-      if (buyers.length > 1)
-        throw new ConflictException(
-          'Hay varios perfiles con este teléfono. Comunícate con un asesor.',
-        );
-      if (buyers[0]) {
-        buyerId = buyers[0].id_buyer;
-        leadId = leadId || buyers[0].id_lead;
-      } else if (!leadId) {
-        const [b] = await m.query(
-          `INSERT INTO buyer(nombres,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at) VALUES($1,$2,$3,'descarga_recurso',$4,now()) RETURNING id_buyer`,
-          [dto.nombres, telefono, s.canal, s.titulo],
-        );
-        buyerId = b.id_buyer;
+      const telefono = normalizeContactPhone(dto.telefono);
+      const owner=await this.identity.resolve(m,null,telefono);
+      let leadId=owner?.id_lead || null, buyerId=owner?.id_buyer || null;
+      if(!owner) {
+        const [b]=await m.query("INSERT INTO buyer(nombres,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at,procedencia_campos) VALUES($1,$2,$3,'descarga_recurso',$4,now(),$5::jsonb) RETURNING id_buyer",[dto.nombres,telefono,s.canal,s.titulo,JSON.stringify({nombres:{origen:'recursos',confirmado:true},telefono:{origen:'recursos',confirmado:true}})]);
+        buyerId=b.id_buyer;
       }
       await m.query(
         'UPDATE solicitud_recurso SET nombres=$1,telefono=$2,id_buyer=$3,id_lead=$4,formulario_completado=now() WHERE id_solicitud=$5',
@@ -323,6 +290,7 @@ export class JourneysService {
         leadId = existing?.id_lead;
       }
       if (!leadId) {
+        if(buyer)await this.identity.releaseBuyer(m,buyer.id_buyer);
         await m.query(
           "SELECT set_config('app.admin_motivo','Interés en reunión desde un recurso; reserva pendiente',true)",
         );
@@ -363,6 +331,7 @@ export class JourneysService {
           "UPDATE buyer SET estado='lead',id_lead=$1,fecha_conversion=now(),updated_at=now() WHERE id_buyer=$2",
           [leadId, buyer.id_buyer],
         );
+      if(buyer)await this.identity.converted(m,buyer.id_buyer,leadId);
       // Todas las solicitudes anteriores del buyer siguen visibles en su ficha de lead.
       if (s.id_buyer)
         await m.query(
@@ -381,7 +350,7 @@ export class JourneysService {
       return { ok: true, ...bounds() };
     });
   }
-  private slots(fecha: string) {
+  slots(fecha: string) {
     const range = bounds();
     if (fecha < range.desde || fecha > range.hasta)
       throw new BadRequestException(
@@ -444,9 +413,8 @@ export class JourneysService {
         await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
           'slot:' + iso,
         ]);
-        await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
-          dto.correo,
-        ]);
+        const owner=await this.identity.resolve(m,dto.correo,telefono);
+        if(owner && owner.id_lead!==s.id_lead)throw new ConflictException('Datos de contacto en conflicto. Solicita revisión administrativa.');
         const [lead] = await m.query(
           'SELECT * FROM lead WHERE id_lead=$1 FOR UPDATE',
           [s.id_lead],
@@ -482,13 +450,19 @@ export class JourneysService {
           ],
         );
         await m.query(
-          'UPDATE lead SET nombres=CASE WHEN correo IS NULL THEN $3 ELSE nombres END,correo=$1,reserva_pendiente=false,updated_at=now() WHERE id_lead=$2',
-          [dto.correo, s.id_lead, dto.nombres],
+          'UPDATE lead SET nombres=coalesce(nombres,$3),correo=coalesce(correo,$1),reserva_pendiente=false,revision=revision+1,updated_at=now(),procedencia_campos=procedencia_campos || $4::jsonb WHERE id_lead=$2',
+          [dto.correo, s.id_lead, dto.nombres, JSON.stringify({
+            ...(!lead.nombres ? {nombres:{origen:'reserva',confirmado:true}} : {}),
+            ...(!lead.correo ? {correo:{origen:'reserva',confirmado:true}} : {}),
+          })],
         );
+        const [academicBefore] = await m.query('SELECT id_universidad,universidad_otra FROM perfil_academico WHERE id_lead=$1', [s.id_lead]);
         await m.query(
           `INSERT INTO perfil_academico(id_lead,universidad_otra) VALUES($1,$2) ON CONFLICT(id_lead) DO UPDATE SET universidad_otra=CASE WHEN perfil_academico.id_universidad IS NULL THEN coalesce(perfil_academico.universidad_otra,excluded.universidad_otra) ELSE perfil_academico.universidad_otra END`,
           [s.id_lead, dto.universidad],
         );
+        if (dto.universidad && !academicBefore?.id_universidad && !academicBefore?.universidad_otra)
+          await m.query('UPDATE lead SET procedencia_campos=procedencia_campos || $2::jsonb WHERE id_lead=$1', [s.id_lead, JSON.stringify({'perfilAcademico.universidadOtra':{origen:'reserva',confirmado:true}})]);
         await this.event(m, s.id_solicitud, 'reserva_confirmada');
         return camel(meeting);
       });
@@ -546,11 +520,19 @@ export class JourneysService {
     if (dto.desde && dto.hasta && dto.desde > dto.hasta)
       throw new BadRequestException('Rango de fechas inválido.');
     const values: unknown[] = [],
-      clauses = journeyConditions(dto, values);
+      clauses = journeyConditions({ ...dto, procedencia: undefined, campana: undefined, actividadDesde: undefined, actividadHasta: undefined, reunion: undefined }, values);
     const add = (sql: string, v: unknown) => {
       values.push(v);
       clauses.push(sql.replaceAll('?', `$${values.length}`));
     };
+    if (dto.actividadDesde && dto.actividadHasta && dto.actividadDesde > dto.actividadHasta)
+      throw new BadRequestException('Rango de actividad inválido.');
+    if (dto.procedencia) add("coalesce(s.canal,sl.utm_source,sl.canal_origen::text)=?", dto.procedencia);
+    if (dto.campana) add("coalesce(s.campana,sl.campana_origen,'') ILIKE ?", `%${dto.campana.replace(/[\\%_]/g, '\\$&')}%`);
+    if (dto.actividadDesde) add("coalesce(s.created_at,r.created_at)>=(?::date::timestamp AT TIME ZONE 'America/Lima')",dto.actividadDesde);
+    if (dto.actividadHasta) add("coalesce(s.created_at,r.created_at)<((?::date+1)::timestamp AT TIME ZONE 'America/Lima')",dto.actividadHasta);
+    if (dto.reunion === 'confirmada' || dto.reunion === 'cancelada') add('r.estado=?',dto.reunion);
+    if (dto.reunion === 'sin_agendar' || dto.reunion === 'pendiente') clauses.push('FALSE');
     if (dto.estado) add('r.estado=?', dto.estado);
     if (dto.q)
       add(
@@ -567,13 +549,13 @@ export class JourneysService {
         "r.fecha_inicio < ((?::date+1)::timestamp AT TIME ZONE 'America/Lima')",
         dto.hasta,
       );
-    const from = `FROM reunion r JOIN solicitud_recurso s USING(id_solicitud) ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}`;
+    const from = `FROM reunion r LEFT JOIN solicitud_recurso s USING(id_solicitud) LEFT JOIN sesion_landing sl ON sl.id_sesion=coalesce(r.id_sesion,s.id_sesion) ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}`;
     const [{ total }] = await this.db.query(
       `SELECT count(*)::int AS total ${from}`,
       values,
     );
     const rows = await this.db.query(
-      `SELECT r.*,s.titulo AS recurso,s.canal,s.campana ${from} ORDER BY r.fecha_inicio DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT r.*,s.titulo AS recurso,coalesce(s.canal,sl.utm_source,sl.canal_origen::text) AS canal,coalesce(s.campana,sl.campana_origen) AS campana ${from} ORDER BY r.fecha_inicio DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, dto.pageSize, (dto.page - 1) * dto.pageSize],
     );
     return {
@@ -583,7 +565,7 @@ export class JourneysService {
       pageSize: dto.pageSize,
     };
   }
-  async cancel(id: string, motivo: string) {
+  async cancel(id: string, motivo: string, usuario: number) {
     return this.db.transaction(async (m) => {
       const [r] = await m.query(
         'SELECT * FROM reunion WHERE id_reunion=$1 FOR UPDATE',
@@ -595,12 +577,12 @@ export class JourneysService {
           'slot:' + new Date(r.fecha_inicio).toISOString(),
         ]);
         await m.query(
-          "UPDATE reunion SET estado='cancelada',motivo_cancelacion=$1,cancelada_at=now() WHERE id_reunion=$2",
-          [motivo, id],
+          "UPDATE reunion SET estado='cancelada',motivo_cancelacion=$1,cancelada_at=now(),id_usuario_cancelacion=$3 WHERE id_reunion=$2",
+          [motivo, id, usuario],
         );
-        await this.event(m, r.id_solicitud, 'reserva_cancelada');
+        if(r.id_solicitud)await this.event(m, r.id_solicitud, 'reserva_cancelada');
         await m.query(
-          "UPDATE lead SET reserva_pendiente=NOT EXISTS(SELECT 1 FROM reunion WHERE id_lead=$1 AND estado='confirmada' AND fecha_inicio>now()) WHERE id_lead=$1",
+          "UPDATE lead SET reserva_pendiente=NOT EXISTS(SELECT 1 FROM reunion WHERE id_lead=$1 AND estado='confirmada' AND fecha_inicio>now()),revision=revision+1,updated_at=now() WHERE id_lead=$1",
           [r.id_lead],
         );
       }

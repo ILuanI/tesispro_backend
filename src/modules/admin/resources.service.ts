@@ -159,6 +159,8 @@ export class ResourcesService {
     return row;
   }
   async save(dto: ResourceDto, file?: ResourceUpload, id?: number) {
+    if (dto.formato === 'orientativo' && file)
+      throw new BadRequestException('El contenido orientativo se registra mediante un enlace.');
     if (file && dto.archivoUrl)
       throw new BadRequestException('Elige un archivo o un enlace, no ambos.');
     const upload = file ? validateResourceUpload(file, dto.formato) : null;

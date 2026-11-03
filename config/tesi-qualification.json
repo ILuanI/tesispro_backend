@@ -1,0 +1,10 @@
+{
+  "niveles": {
+    "intencion_contratacion": ["intencion_contratar"],
+    "alto": ["consulta_precio", "consulta_modalidad", "consulta_plazo", "consulta_propuesta"],
+    "medio": ["necesidad"],
+    "bajo": []
+  },
+  "prioridad": ["intencion_contratacion", "alto", "medio", "bajo"],
+  "recomendacionRequiere": ["necesidad", "etapa"]
+}

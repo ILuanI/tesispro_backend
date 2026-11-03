@@ -10,8 +10,8 @@ export class Seguimiento {
   @PrimaryGeneratedColumn({ name: 'id_seguimiento', type: 'bigint' })
   idSeguimiento: string;
 
-  @Column({ name: 'id_propuesta', type: 'bigint' })
-  idPropuesta: string;
+  @Column({ name: 'id_propuesta', type: 'bigint', nullable: true })
+  idPropuesta: string | null;
 
   @Column({ name: 'id_lead', type: 'bigint' })
   idLead: string;
@@ -43,9 +43,11 @@ export class Seguimiento {
   @Column({ name: 'generado_por_ia', type: 'boolean', default: true })
   generadoPorIa: boolean;
 
-  @ManyToOne(() => Propuesta)
+  @Column({ name: 'id_usuario', type: 'int', nullable: true }) idUsuario: number | null;
+
+  @ManyToOne(() => Propuesta, { nullable: true })
   @JoinColumn({ name: 'id_propuesta' })
-  propuesta: Relation<Propuesta>;
+  propuesta: Relation<Propuesta> | null;
 
   @ManyToOne(() => Lead)
   @JoinColumn({ name: 'id_lead' })

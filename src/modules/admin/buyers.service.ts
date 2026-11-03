@@ -1,3 +1,4 @@
+import { ContactIdentityService } from './contact-identity.service.js';
 import {
   BadRequestException,
   ConflictException,
@@ -15,6 +16,7 @@ import {
 } from './buyers.dto.js';
 
 import { profileJourneyFilter } from './journey-filters.js';
+import type { ProfilePageDto } from './lead-profile.dto.js';
 
 type Row = Record<string, any>;
 const camel = (row: Row) =>
@@ -32,7 +34,7 @@ const map = (rows: Row[]) => rows.map(camel);
 
 @Injectable()
 export class BuyersService {
-  constructor(private readonly db: DataSource) {}
+  constructor(private readonly db: DataSource, private readonly identity:ContactIdentityService) {}
   async catalogos() {
     const [universidades, grados, etapas, estadosLead] = await Promise.all([
       this.db.query(
@@ -146,6 +148,18 @@ export class BuyersService {
     const [row] = await this.db.query(`${select} WHERE b.id_lead=$1`, [id]);
     return row ? camel(row) : null;
   }
+  async interactions(id: string, dto: ProfilePageDto) {
+    await this.detail(id);
+    const sql = `SELECT 'perfil:'||id_evento AS referencia,tipo,fecha,origen,despues AS detalle FROM evento_perfil WHERE id_buyer=$1
+      UNION ALL SELECT 'mensaje:'||m.id_mensaje,'mensaje',m.enviado_en,'tesi',jsonb_build_object('contenido',m.contenido,'remitente',m.remitente)
+      FROM mensaje m JOIN conversacion c USING(id_conversacion)
+      WHERE EXISTS(SELECT 1 FROM acceso_contacto a WHERE a.id_sesion=c.id_sesion AND a.id_buyer=$1)`;
+    return this.db.transaction('REPEATABLE READ', async (m) => {
+      const [{total}] = await m.query(`SELECT count(*)::int AS total FROM (${sql}) t`,[id]);
+      const items = await m.query(`SELECT * FROM (${sql}) t ORDER BY fecha DESC,referencia DESC LIMIT $2 OFFSET $3`,[id,dto.pageSize,(dto.page-1)*dto.pageSize]);
+      return {items,total,page:dto.page,pageSize:dto.pageSize};
+    });
+  }
   private async validate(dto: BuyerDto, m: EntityManager) {
     const today = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Lima',
@@ -195,9 +209,10 @@ export class BuyersService {
   }
   async save(dto: BuyerDto, user: number, id?: string) {
     return this.db.transaction(async (m) => {
+      let before: Row | null = null;
       if (id) {
         const [current] = await m.query(
-          'SELECT estado FROM buyer WHERE id_buyer=$1 FOR UPDATE',
+          'SELECT * FROM buyer WHERE id_buyer=$1 FOR UPDATE',
           [id],
         );
         if (!current) throw new NotFoundException('Buyer no encontrado.');
@@ -205,6 +220,8 @@ export class BuyersService {
           throw new ConflictException(
             'Este perfil ya fue convertido. Edítalo desde Leads.',
           );
+        if(dto.revision!==current.revision)throw new ConflictException('El perfil cambió. Recarga la ficha antes de guardar.');
+        before=current;
       }
       await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         dto.correo || dto.telefono,
@@ -220,11 +237,13 @@ export class BuyersService {
           'Este correo ya pertenece a un lead. Gestiona su perfil desde Leads.',
         );
       await this.validate(dto, m);
+      const owner=await this.identity.resolve(m,dto.correo,dto.telefono);
+      if(owner && (!id || owner.id_buyer!==id))throw new ConflictException('El contacto ya existe. Gestiona su perfil actual.');
       const fields: Row = {
-        nombres: dto.nombres,
+        nombres: dto.nombres?.trim() || null,
         apellidos: dto.apellidos || null,
         correo: dto.correo || null,
-        telefono: dto.telefono,
+        telefono: dto.telefono || null,
         fecha_nacimiento: dto.fechaNacimiento || null,
         edad_declarada: dto.fechaNacimiento
           ? null
@@ -241,6 +260,7 @@ export class BuyersService {
         recurso_interes: dto.recursoInteres || null,
         notas: dto.notas || null,
       };
+      await m.query("SELECT set_config('app.admin_usuario',$1,true)",[String(user)]);
       const cols = Object.keys(fields),
         values = Object.values(fields);
       let buyerId: string;
@@ -257,6 +277,9 @@ export class BuyersService {
         );
         buyerId = row.id_buyer;
       }
+      await m.query("UPDATE buyer SET revision=revision+1,procedencia_campos=procedencia_campos || $2::jsonb WHERE id_buyer=$1",[buyerId,JSON.stringify(Object.fromEntries(Object.keys(dto).map(k=>[k,{origen:'administracion',confirmado:true,idUsuario:user}])))]);
+      const [after] = await m.query('SELECT * FROM buyer WHERE id_buyer=$1',[buyerId]);
+      await m.query("INSERT INTO evento_perfil(id_buyer,tipo,origen,id_usuario,antes,despues) VALUES($1,$2,'administracion',$3,$4::jsonb,$5::jsonb)",[buyerId,before?'buyer_editado':'buyer_creado',user,JSON.stringify(before),JSON.stringify(after)]);
       if (dto.estado === 'lead') {
         if (!dto.idEstadoLead || !dto.motivoConversion?.trim())
           throw new BadRequestException(
@@ -307,6 +330,7 @@ export class BuyersService {
                 `Captación buyer #${buyerId}`,
               ],
             );
+        await this.identity.releaseBuyer(m,buyerId);
         const [lead] = await m.query(
           `INSERT INTO lead(nombres,apellidos,correo,telefono,fecha_nacimiento,departamento,id_estado,id_sesion_origen,fecha_registro,reserva_pendiente) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now(),$9) RETURNING id_lead`,
           [
@@ -344,6 +368,7 @@ export class BuyersService {
           'UPDATE solicitud_recurso SET id_lead=$1 WHERE id_buyer=$2',
           [lead.id_lead, buyerId],
         );
+        await this.identity.converted(m,buyerId,lead.id_lead);
         return { idBuyer: buyerId, estado: 'lead', idLead: lead.id_lead };
       }
       return this.detail(buyerId, m);
@@ -369,31 +394,11 @@ export class BuyersService {
     });
   }
   async capture(dto: CaptureBuyerDto) {
-    await this.db.transaction(async (m) => {
-      await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
-        dto.correo,
-      ]);
-      if (
-        (
-          await m.query('SELECT 1 FROM lead WHERE lower(correo)=$1', [
-            dto.correo,
-          ])
-        ).length
-      )
-        return;
-      // Una captación anónima nunca modifica ni revela un perfil existente.
-      await m.query(
-        `INSERT INTO buyer(nombres,correo,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at)
-        VALUES($1,$2,$3,$4,'descarga_recurso',$5,now()) ON CONFLICT(correo) DO NOTHING`,
-        [
-          dto.nombres,
-          dto.correo,
-          dto.telefono,
-          dto.canalOrigen,
-          dto.recursoInteres,
-        ],
-      );
-    });
-    return { ok: true };
+    await this.db.transaction(async m=>{
+      const owner=await this.identity.resolve(m,dto.correo,dto.telefono);
+      let buyer=owner?.id_buyer||null,lead=owner?.id_lead||null;
+      if(!owner){const [b]=await m.query("INSERT INTO buyer(nombres,correo,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at) VALUES($1,$2,$3,$4,'descarga_recurso',$5,now()) RETURNING id_buyer",[dto.nombres,dto.correo,dto.telefono,dto.canalOrigen,dto.recursoInteres]);buyer=b.id_buyer;}
+      await m.query("INSERT INTO evento_perfil(id_buyer,id_lead,tipo,origen,despues) VALUES($1,$2,'captacion','recursos',$3::jsonb)",[buyer,lead,JSON.stringify({canal:dto.canalOrigen,recurso:dto.recursoInteres})]);
+    });return {ok:true};
   }
 }

@@ -47,16 +47,8 @@ export class BookMeetingDto {
   @IsEmail()
   @MaxLength(150)
   correo: string;
-  @Transform(trim)
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  universidad: string;
-  @Transform(trim)
-  @IsString()
-  @MinLength(1)
-  @MaxLength(5000)
-  descripcion: string;
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(200) universidad?: string;
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(5000) descripcion?: string;
   @IsISO8601({ strict: true })
   @Matches(/(Z|[+-]\d{2}:\d{2})$/)
   fechaInicio: string;

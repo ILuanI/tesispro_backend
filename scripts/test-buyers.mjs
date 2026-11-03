@@ -1,3 +1,5 @@
+import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
 import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
 // Pruebas con HTTP y PostgreSQL reales, aisladas en un esquema temporal.
@@ -57,6 +59,8 @@ try {
       BuyerAcademicCatalogs1792310000000,
       ResourceLibrary1792200000000,
       ResourceJourneys1792400000000,
+      LeadProfiling1792500000000,
+      TesiQualification1792600000000,
     ],
   };
   db = new DataSource(options);
@@ -89,6 +93,7 @@ try {
     cookie = '';
   process.env.APP_ORIGIN = origin;
   async function http(path, method = 'GET', body, extra = {}) {
+    if(method==='PATCH' && /^\/admin\/buyers\/\d+$/.test(path) && body && body.revision===undefined) {const [current]=await db.query('SELECT revision FROM buyer WHERE id_buyer=$1',[path.split('/').at(-1)]);if(current)body={...body,revision:current.revision};}
     return fetch(`${base}${path}`, {
       method,
       headers: {
@@ -249,7 +254,6 @@ try {
         { idUniversidad: 999999 },
         { idGrado: 32768 },
         { idEtapa: 999999 },
-        { nombres: ' ' },
         { fechaRegistro: '2999-01-01T00:00:00Z' },
         { idUniversidad: university, universidadOtra: 'Otra' },
       ])
@@ -281,7 +285,7 @@ try {
       await expect(
         '/captacion/buyers',
         'POST',
-        { ...capture, nombres: 'Otro nombre', telefono: '999999' },
+        { ...capture, nombres: 'Otro nombre', telefono: '999999999' },
         201,
       );
       assert.equal((await expect(`${root}?q=visitante@example.test`)).total, 1);
@@ -344,7 +348,7 @@ try {
         '/captacion/buyers',
         'POST',
         { ...capture, correo: dto.correo },
-        201,
+        409,
       );
       assert.equal((await expect(`${root}?q=maria@example.test`)).total, 0);
     },
@@ -355,13 +359,14 @@ try {
       const row = await expect(
         root,
         'POST',
-        { ...dto, correo: 'concurrent@example.test' },
+        { ...dto, correo: 'concurrent@example.test', telefono: '999555777' },
         201,
       );
       const results = await Promise.all([
         http(`${root}/${row.idBuyer}`, 'PATCH', {
           ...dto,
           correo: row.correo,
+          telefono: row.telefono,
           estado: 'lead',
           idEstadoLead: newState,
           motivoConversion: 'Consultó precios',
@@ -369,6 +374,7 @@ try {
         http(`${root}/${row.idBuyer}`, 'PATCH', {
           ...dto,
           correo: row.correo,
+          telefono: row.telefono,
           estado: 'lead',
           idEstadoLead: newState,
           motivoConversion: 'Consultó precios',
@@ -383,7 +389,7 @@ try {
   );
   if (process.env.BUYERS_UI_TARGET) {
     const requireFrontend = createRequire(
-        new URL('../../tesispro_frontend/package.json', import.meta.url),
+        new URL('../../tesispro-landing/package.json', import.meta.url),
       ),
       { chromium, expect: uiExpect } = requireFrontend('@playwright/test');
     const backend = new URL(base),
@@ -433,13 +439,13 @@ try {
           .getByRole('button', { name: 'Nuevo buyer', exact: true })
           .click();
         const dialog = page.getByRole('dialog');
-        await dialog.getByLabel('Nombres *', { exact: true }).fill('Lucía');
+        await dialog.getByLabel('Nombres', { exact: true }).fill('Lucía');
         await dialog
           .getByLabel('Correo electrónico', { exact: true })
           .fill('lucia@example.test');
         await dialog
-          .getByLabel('Teléfono *', { exact: true })
-          .fill('999111222');
+          .getByLabel('Teléfono', { exact: true })
+          .fill('999333444');
         await dialog.getByLabel('Edad declarada', { exact: true }).fill('29');
         await dialog.getByLabel('Departamento', { exact: true }).fill('Lima');
         await dialog

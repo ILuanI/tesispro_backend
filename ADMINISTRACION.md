@@ -98,3 +98,24 @@ Las fechas se distribuyen en los 30 días anteriores a la primera carga tomando 
 Repetir el comando no duplica ni actualiza la muestra. Si está parcialmente cargada o se cambiaron sus correos, el comando se detiene sin escribir cambios. No refresca las fechas de datos ya creados: para una muestra antigua, utilizar el filtro de fechas del periodo de carga. Para localizar o retirar posteriormente estos registros, utilizar la lista exacta `demoEmails` y `demoMarker` del script, respetando sus dependencias financieras.
 
 `pnpm run test:demo` prueba la carga, idempotencia, coherencia financiera y agregados de dashboard/indicadores en un esquema temporal aislado que se elimina al terminar. No añade datos a la base de trabajo.
+
+
+## Perfilamiento R6
+
+La migración `LeadProfiling1792500000000` crea el registro único de identidades, auditoría de cambios, sesiones anónimas y sugerencias de Tesi. Si existen correos o teléfonos normalizados repetidos, la migración se detiene para que se revisen; no fusiona contactos autom?ticamente. Tomar un respaldo antes de aplicar migraciones en una base con datos.
+
+Ejecutar `pnpm migration:run` y configurar `CRM_BRIDGE_SECRET` con el mismo valor aleatorio de al menos 32 caracteres en los entornos privados de Astro y NestJS. En Astro, `CRM_API_URL` apunta al backend para Tesi y `API_PROXY_TARGET` para `/api/auth`, `/api/admin`, `/api/captacion` y `/api/public`. En producción se debe enrutar tambi?n `/r/` al backend. No exponer `/internal` a Internet. El secreto nunca se env?a al navegador.
+
+La sesión `tesispro_contact` dura 30 días y agrupa interacciones del navegador. No autoriza lectura de datos y no se guarda IP como identificador. Se exige correo o teléfono para el perfil y nombre y teléfono para la descarga de recursos. Las captaciones existentes agregan eventos sin sustituir datos del perfil. Los conflictos de identidad requieren revisión humana. La edici?n de leads exige la revisión recibida en `GET /admin/leads/:id`; un `409` indica que se debe recargar. Los campos omitidos se conservan, y `null` elimina un valor opcional.
+
+`GET /admin/leads/:id/interacciones` y `GET /admin/leads/:id/conversaciones/:conversacion/mensajes` están paginados. Las acciones en `/seguimientos` y `/sugerencias/:id` requieren administrador y revisión vigente. Tesi persiste turnos idempotentes y conserva sugerencias con evidencia; solo un administrador puede aceptarlas. La aceptaci?n o el rechazo, la edici?n de perfil y los seguimientos se auditan.
+
+`pnpm test:lead-profile` usa un esquema temporal y verifica PostgreSQL y HTTP sin modificar los datos de trabajo. Las pruebas de Tesi, de formularios y de navegador requieren las variables de integración y ambos servicios en ejecución.
+# Calificación de Tesi (R7)
+
+Las reglas están en `config/tesi-qualification.json`. El servidor valida el archivo al arrancar y calcula una huella SHA-256 del contenido normalizado. Al cambiarlo hay que reiniciar el backend; las evaluaciones anteriores conservan su versión. `R7_RULES_FILE` permite seleccionar otra ruta. Una configuración inválida impide nuevas evaluaciones y deja disponible la administración.
+
+Cada evaluación conserva los campos y señales interpretados con fragmentos literales y referencias a mensajes del visitante. Son inferencias y no reemplazan el interés manual ni los campos confirmados. La coincidencia literal no garantiza que la interpretación sea correcta. Las solicitudes de asesor crean una derivación pendiente; abrir WhatsApp no acredita que se haya enviado un mensaje ni que se haya atendido la solicitud.
+
+La consulta autenticada `GET /admin/leads/:id/conversaciones/:conversation/calificacion` devuelve la última evaluación versionada de la conversación del lead. Es un punto de integración preliminar; R8 todavía no tiene contrato implementado. Ejecutar las migraciones de TypeORM antes de iniciar esta versión y configurar el proxy y `CRM_BRIDGE_SECRET` como se explica en la sección de captación.
+

@@ -1,3 +1,4 @@
+import { AcademicProfileDto, WorkProfileDto, ThesisProjectDto } from './lead-profile.dto.js';
 import { Type } from 'class-transformer';
 import { JourneyFilterDto } from './journeys.dto.js';
 import {
@@ -32,6 +33,9 @@ export class LoginDto {
   @IsString() @MinLength(1) @MaxLength(200) password: string;
 }
 export class ListDto extends JourneyFilterDto {
+  @IsOptional() @IsString() @MaxLength(40) origen?: string;
+  @IsOptional() @Type(()=>Number) @IsInt() @Min(1) idEtapa?: number;
+  @IsOptional() @Type(()=>Number) @IsInt() @Min(1) idNecesidad?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
   @IsOptional() @IsString() @MaxLength(150) q?: string;
@@ -65,11 +69,15 @@ export class ListDto extends JourneyFilterDto {
   @IsOptional() @IsIn(['true', 'false']) vencida?: string;
 }
 export class LeadDto {
-  @IsString() @MinLength(1) @MaxLength(100) nombres: string;
+  @IsOptional() @IsInt() @Min(1) revision?: number;
+  @IsOptional() @ValidateNested() @Type(()=>AcademicProfileDto) perfilAcademico?: AcademicProfileDto;
+  @IsOptional() @ValidateNested() @Type(()=>WorkProfileDto) perfilLaboral?: WorkProfileDto;
+  @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({each:true}) @Type(()=>ThesisProjectDto) proyectos?: ThesisProjectDto[];
+  @IsOptional() @IsString() @MaxLength(100) nombres?: string | null;
   @IsOptional() @IsString() @MaxLength(100) apellidos?: string | null;
   @IsOptional() @IsEmail() @MaxLength(150) correo?: string | null;
-  @IsString() @MinLength(5) @MaxLength(20) telefono: string;
-  @IsInt() @Min(1) idEstado: number;
+  @IsOptional() @IsString() @MaxLength(25) telefono?: string | null;
+  @IsOptional() @IsInt() @Min(1) idEstado?: number;
   @IsOptional() @IsInt() @Min(1) idResponsable?: number | null;
   @IsOptional() @IsString() @MaxLength(60) departamento?: string | null;
   @IsOptional()

@@ -1,3 +1,4 @@
+import { LeadProfileService } from './lead-profile.service.js';
 import {
   BadRequestException,
   ConflictException,
@@ -78,7 +79,7 @@ class Filters {
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly db: DataSource) {}
+  constructor(private readonly db: DataSource, private readonly profiles: LeadProfileService) {}
   private async paged(sql: string, f: Filters, dto: ListDto, order: string) {
     if (dto.desde && dto.hasta && dto.desde > dto.hasta)
       throw new BadRequestException('El rango de fechas es inválido.');
@@ -125,6 +126,9 @@ export class AdminService {
       f.clauses.push('id_responsable IS NULL');
     else if (dto.responsable)
       f.add('id_responsable=?', Number(dto.responsable));
+    if(dto.idEtapa)f.add('EXISTS(SELECT 1 FROM proyecto_tesis p WHERE p.id_lead=x.id_lead AND p.id_etapa=?)',dto.idEtapa);
+    if(dto.idNecesidad)f.add('EXISTS(SELECT 1 FROM proyecto_tesis p JOIN proyecto_necesidad pn USING(id_proyecto) WHERE p.id_lead=x.id_lead AND pn.id_necesidad=?)',dto.idNecesidad);
+    if(dto.origen)f.add("(EXISTS(SELECT 1 FROM sesion_landing sl WHERE sl.id_sesion=x.id_sesion_origen AND coalesce(sl.utm_source,sl.canal_origen::text)=?) OR EXISTS(SELECT 1 FROM solicitud_recurso sr WHERE sr.id_lead=x.id_lead AND sr.canal=?) OR EXISTS(SELECT 1 FROM evento_perfil ep JOIN sesion_landing sl ON sl.id_sesion=ep.id_sesion WHERE ep.id_lead=x.id_lead AND coalesce(sl.utm_source,sl.canal_origen::text)=?))",dto.origen);
     if (dto.canal) f.add('canal_preferido=?', dto.canal);
     if (dto.desde)
       f.add(
@@ -166,7 +170,7 @@ export class AdminService {
       LEFT JOIN grado_academico g ON g.id_grado=pa.id_grado WHERE pa.id_lead=$1`,
       [id],
     );
-    return { ...camel(lead), perfilAcademico: perfil ? camel(perfil) : null };
+    return { ...camel(lead), perfilAcademico: perfil ? camel(perfil) : null, ...await this.profiles.enrich(id) };
   }
   async historial(id: string) {
     await this.lead(id);
@@ -185,58 +189,8 @@ export class AdminService {
       [String(user), motivo],
     );
   }
-  async saveLead(dto: LeadDto, user: number, id?: string) {
-    if (!dto.nombres.trim())
-      throw new BadRequestException('Ingresa el nombre del lead.');
-    const fields: Record<string, any> = {
-      nombres: dto.nombres.trim(),
-      apellidos: dto.apellidos?.trim() || null,
-      correo: dto.correo?.trim().toLowerCase() || null,
-      telefono: dto.telefono.trim(),
-      id_estado: dto.idEstado,
-      id_responsable: dto.idResponsable || null,
-      departamento: dto.departamento?.trim() || null,
-      fecha_nacimiento: dto.fechaNacimiento || null,
-      canal_preferido: dto.canalPreferido || null,
-      modalidad_preferida: dto.modalidadPreferida || null,
-      horario_preferido: dto.horarioPreferido || null,
-      cumple_perfil_objetivo: dto.cumplePerfilObjetivo || false,
-      nivel_interes: dto.nivelInteres || null,
-    };
-    return this.db.transaction(async (m) => {
-      await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [fields.correo || fields.telefono]);
-      const [buyer] = await m.query("SELECT id_buyer FROM buyer WHERE correo=$1 AND estado='buyer'", [fields.correo]);
-      if (buyer) throw new ConflictException('Este correo pertenece a un buyer. Convierte su perfil desde Buyers para conservar sus datos.');
-      if (id) {
-        const [current] = await m.query(
-          'SELECT id_estado,reserva_pendiente FROM lead WHERE id_lead=$1 FOR UPDATE',
-          [id],
-        );
-        if (!current) throw new NotFoundException('Lead no encontrado.');
-        if(!fields.correo && !current.reserva_pendiente)throw new BadRequestException('El correo es obligatorio para este lead.');
-        if (current.id_estado !== dto.idEstado && !dto.motivo?.trim())
-          throw new BadRequestException(
-            'Indica el motivo del cambio de estado.',
-          );
-      }
-      if(!id && !fields.correo)throw new BadRequestException('Ingresa el correo del lead.');
-      if (dto.idResponsable) {
-        const [responsable] = await m.query(
-          'SELECT id_usuario FROM usuario_interno WHERE id_usuario=$1 AND activo=true',
-          [dto.idResponsable],
-        );
-        if (!responsable)
-          throw new BadRequestException('El responsable no está activo.');
-      }
-      await this.context(m, user, dto.motivo || 'Lead creado desde el panel');
-      const cols = Object.keys(fields),
-        values = Object.values(fields);
-      const sql = id
-        ? `UPDATE lead SET ${cols.map((c, i) => `${c}=$${i + 1}`).join(',')} WHERE id_lead=$${values.length + 1} RETURNING *`
-        : `INSERT INTO lead(${cols.join(',')}) VALUES(${values.map((_, i) => `$${i + 1}`).join(',')}) RETURNING *`;
-      const [row] = await m.query(sql, id ? [...values, id] : values);
-      return camel(row);
-    });
+  saveLead(dto: LeadDto, user: number, id?: string) {
+    return this.profiles.save(dto,user,id);
   }
   contratos(dto: ContractListDto) {
     const f = new Filters();
@@ -810,7 +764,10 @@ export class AdminService {
         'SELECT l.*,e.nombre AS estado_nombre FROM lead l JOIN estado_lead e USING(id_estado) ORDER BY fecha_registro DESC LIMIT 5',
       ),
     ]);
+    const origenes=await this.db.query("SELECT coalesce(nullif(s.utm_source,''),s.canal_origen::text,'administracion') AS origen,count(*)::int AS total FROM lead l LEFT JOIN sesion_landing s ON s.id_sesion=l.id_sesion_origen GROUP BY 1 ORDER BY total DESC");
+    const [seguimiento]=await this.db.query("SELECT count(DISTINCT id_lead) FILTER(WHERE fecha_programada<now())::int AS vencidos,count(DISTINCT id_lead) FILTER(WHERE fecha_programada>=now())::int AS proximos FROM seguimiento WHERE estado='programado'");
     return {
+      origenes, seguimiento,
       leads: leads[0],
       estados: map(estados),
       monedas: map(monedas),

@@ -1,3 +1,5 @@
+import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 // API y navegador contra PostgreSQL real, siempre en un esquema temporal.
 import 'reflect-metadata';
 import 'dotenv/config';
@@ -55,6 +57,8 @@ try {
       ResourceLibrary1792200000000,
       BuyerProfiles1792300000000,
       ResourceJourneys1792400000000,
+      LeadProfiling1792500000000,
+      TesiQualification1792600000000,
     ],
   };
   db = new DataSource(options);
@@ -74,6 +78,7 @@ try {
     cookie = '';
   process.env.APP_ORIGIN = origin;
   async function http(path, method = 'GET', body, token, extra = {}) {
+    if(method==='PATCH' && /^\/admin\/buyers\/\d+$/.test(path) && body && body.revision===undefined) {const [current]=await db.query('SELECT revision FROM buyer WHERE id_buyer=$1',[path.split('/').at(-1)]);if(current)body={...body,revision:current.revision};}
     return fetch(base + path, {
       method,
       redirect: 'manual',
@@ -551,7 +556,7 @@ try {
   );
   if (process.env.JOURNEYS_UI_TARGET) {
     const requireFrontend = createRequire(
-        new URL('../../tesispro_frontend/package.json', import.meta.url),
+        new URL('../../tesispro-landing/package.json', import.meta.url),
       ),
       { chromium, expect: ui } = requireFrontend('@playwright/test');
     const backend = new URL(base),

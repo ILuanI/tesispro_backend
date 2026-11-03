@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import { AuthService, Public, type AdminRequest } from './auth.js';
 import { BuyerDto, BuyerListDto, CaptureBuyerDto } from './buyers.dto.js';
 import { BuyersService } from './buyers.service.js';
+import { ProfilePageDto } from './lead-profile.dto.js';
 function buyerId(id: string) {
   if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n)
     throw new BadRequestException('ID inválido.');
@@ -42,6 +43,9 @@ export class BuyersController {
   }
   @Get(':id') detail(@Param('id') id: string) {
     return this.service.detail(buyerId(id));
+  }
+  @Get(':id/interacciones') interactions(@Param('id') id: string, @Query() dto: ProfilePageDto) {
+    return this.service.interactions(buyerId(id), dto);
   }
   @Post() create(@Body() dto: BuyerDto, @Req() req: AdminRequest) {
     return this.service.save(dto, req.admin.idUsuario);
