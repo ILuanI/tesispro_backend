@@ -14,6 +14,10 @@ import {
 } from './buyers.controller.js';
 import { BuyersService } from './buyers.service.js';
 import { JourneysService } from './journeys.service.js';
+import { PackagesService } from './packages.service.js';
+import { PackagesController, PublicPackagesController } from './packages.controller.js';
+import { ReferralsService } from './referrals.service.js';
+import { ReferralsController, PublicReferralsController } from './referrals.controller.js';
 import {
   PublicResourcesController,
   ResourceLinksController,
@@ -51,6 +55,9 @@ class DatabaseErrorFilter implements ExceptionFilter {
 }
 @Module({
   controllers: [
+    PackagesController, PublicPackagesController,
+    ReferralsController,
+    PublicReferralsController,
     AuthController,
     AdminController,
     ContractsController,
@@ -62,6 +69,8 @@ class DatabaseErrorFilter implements ExceptionFilter {
     JourneysAdminController,
   ],
   providers: [
+    PackagesService,
+    ReferralsService,
     AuthService,
     AdminService,
     ContractsService,

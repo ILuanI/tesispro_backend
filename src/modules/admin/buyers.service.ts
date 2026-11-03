@@ -15,6 +15,7 @@ import {
 } from './buyers.dto.js';
 
 import { profileJourneyFilter } from './journey-filters.js';
+import { ReferralsService, referralPhone } from './referrals.service.js';
 
 type Row = Record<string, any>;
 const camel = (row: Row) =>
@@ -32,7 +33,7 @@ const map = (rows: Row[]) => rows.map(camel);
 
 @Injectable()
 export class BuyersService {
-  constructor(private readonly db: DataSource) {}
+  constructor(private readonly db: DataSource, private readonly referrals: ReferralsService) {}
   async catalogos() {
     const [universidades, grados, etapas, estadosLead] = await Promise.all([
       this.db.query(
@@ -368,11 +369,16 @@ export class BuyersService {
       return { ok: true };
     });
   }
-  async capture(dto: CaptureBuyerDto) {
+  async capture(dto: CaptureBuyerDto, referralToken = '') {
     await this.db.transaction(async (m) => {
       await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         dto.correo,
       ]);
+      // Same normalized phone lock as the resource journey; no new profile for an existing person.
+      const phone = referralPhone(dto.telefono);
+      await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['+' + phone]);
+      const phoneExpr = `CASE WHEN length(regexp_replace(telefono,'[^0-9]','','g'))=9 THEN '51'||regexp_replace(telefono,'[^0-9]','','g') ELSE regexp_replace(telefono,'[^0-9]','','g') END`;
+      if ((await m.query(`SELECT 1 FROM buyer WHERE ${phoneExpr}=$1 UNION ALL SELECT 1 FROM lead WHERE ${phoneExpr}=$1 LIMIT 1`, [phone])).length) return;
       if (
         (
           await m.query('SELECT 1 FROM lead WHERE lower(correo)=$1', [
@@ -382,9 +388,9 @@ export class BuyersService {
       )
         return;
       // Una captación anónima nunca modifica ni revela un perfil existente.
-      await m.query(
+      const [created] = await m.query(
         `INSERT INTO buyer(nombres,correo,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at)
-        VALUES($1,$2,$3,$4,'descarga_recurso',$5,now()) ON CONFLICT(correo) DO NOTHING`,
+        VALUES($1,$2,$3,$4,'descarga_recurso',$5,now()) ON CONFLICT(correo) DO NOTHING RETURNING id_buyer`,
         [
           dto.nombres,
           dto.correo,
@@ -393,6 +399,7 @@ export class BuyersService {
           dto.recursoInteres,
         ],
       );
+      if (created) await this.referrals.attribute(m, referralToken, created.id_buyer);
     });
     return { ok: true };
   }

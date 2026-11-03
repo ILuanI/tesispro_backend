@@ -16,6 +16,7 @@ import {
   ResourceContactDto,
 } from './journeys.dto.js';
 import { journeyConditions } from './journey-filters.js';
+import { ReferralsService } from './referrals.service.js';
 
 type Row = Record<string, any>;
 const camel = (r: Row) =>
@@ -48,7 +49,7 @@ const published = `activo=true AND publicado=true`;
 
 @Injectable()
 export class JourneysService {
-  constructor(private readonly db: DataSource) {}
+  constructor(private readonly db: DataSource, private readonly referrals: ReferralsService) {}
   async publicResources() {
     return this.db.query(
       `SELECT id_recurso AS "idRecurso",titulo,descripcion,categoria,formato FROM recurso_gratuito WHERE ${published} AND destacado=true ORDER BY fecha_actualizacion DESC,id_recurso DESC`,
@@ -209,7 +210,7 @@ export class JourneysService {
       };
     });
   }
-  async contact(token: string, dto: ResourceContactDto) {
+  async contact(token: string, dto: ResourceContactDto, referralToken = '') {
     return this.db.transaction(async (m) => {
       const s = await this.access(m, token);
       if (s.formulario_completado) return { ok: true };
@@ -226,6 +227,7 @@ export class JourneysService {
         throw new ConflictException(
           'Hay varios perfiles con este teléfono. Comunícate con un asesor.',
         );
+      let created = false;
       let leadId = leads[0]?.id_lead || null,
         buyerId = null;
       const buyers = await m.query(
@@ -245,6 +247,7 @@ export class JourneysService {
           [dto.nombres, telefono, s.canal, s.titulo],
         );
         buyerId = b.id_buyer;
+        created = true;
       }
       await m.query(
         'UPDATE solicitud_recurso SET nombres=$1,telefono=$2,id_buyer=$3,id_lead=$4,formulario_completado=now() WHERE id_solicitud=$5',
@@ -255,6 +258,7 @@ export class JourneysService {
         [s.id_sesion],
       );
       await this.event(m, s.id_solicitud, 'formulario_completado', true);
+      if (created && buyerId) await this.referrals.attribute(m, referralToken, buyerId);
       return { ok: true };
     });
   }

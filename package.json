@@ -7,6 +7,10 @@
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
+    "test:packages": "pnpm build && node scripts/test-packages.mjs",
+    "test:packages:browser": "pnpm build && node scripts/test-packages.mjs --browser",
+    "test:referrals": "pnpm build && node scripts/test-referrals.mjs",
+    "test:referrals:browser": "pnpm build && node scripts/test-referrals.mjs --browser",
     "admin:create": "pnpm build && node scripts/create-admin.mjs",
     "test:admin": "pnpm build && node scripts/test-admin.mjs",
     "test:contracts": "pnpm build && node scripts/test-contracts.mjs",

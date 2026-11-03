@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService, Public } from './auth.js';
+import { ReferralsService, referralCookie } from './referrals.service.js';
 import { JourneysService } from './journeys.service.js';
 import {
   AttributionDto,
@@ -40,6 +41,7 @@ export class PublicResourcesController {
   constructor(
     private readonly service: JourneysService,
     private readonly auth: AuthService,
+    private readonly referrals: ReferralsService,
   ) {}
   @Get() list() {
     return this.service.publicResources();
@@ -52,7 +54,8 @@ export class PublicResourcesController {
     @Body() dto: ResourceContactDto,
   ) {
     this.auth.checkOrigin(req);
-    return this.service.contact(token(req), dto);
+    if (referralCookie(req)) this.referrals.limit(req.ip || 'unknown');
+    return this.service.contact(token(req), dto, referralCookie(req));
   }
   @Post('opciones') options(@Req() req: Request) {
     this.auth.checkOrigin(req);

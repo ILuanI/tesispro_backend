@@ -12,6 +12,7 @@ import {
   UpdateContractDto,
 } from './contracts.dto.js';
 import { cents, decimal } from './money.js';
+import { PackagesService } from './packages.service.js';
 
 const camel = (row: Record<string, any>) =>
   Object.fromEntries(
@@ -26,13 +27,16 @@ export class ContractsService {
   constructor(
     private readonly db: DataSource,
     private readonly admin: AdminService,
+    private readonly packages: PackagesService,
   ) {}
 
   async catalogos() {
+    if (await this.packages.isExistingCatalog())
+      return this.packages.catalogs();
     return {
       servicios: (
         await this.db.query(
-          'SELECT id_servicio,codigo,nombre FROM servicio WHERE activo=true ORDER BY nombre',
+          `SELECT id_servicio,codigo,nombre FROM servicio WHERE activo=true AND NOT (to_jsonb(servicio) @> '{"es_paquete":true}'::jsonb) ORDER BY nombre`,
         )
       ).map(camel),
       monedas: ['PEN', 'USD', 'EUR'],
@@ -56,15 +60,33 @@ export class ContractsService {
         [contract.id_propuesta],
       );
       const lines = await m.query(
-        `SELECT d.*,s.nombre AS servicio_nombre FROM propuesta_detalle d
+        `SELECT d.*,s.nombre AS servicio_nombre,(to_jsonb(s) @> '{"es_paquete":true}'::jsonb) AS es_paquete FROM propuesta_detalle d
         JOIN servicio s USING(id_servicio) WHERE id_propuesta=$1 ORDER BY id_detalle`,
         [contract.id_propuesta],
       );
       const locked = await this.dependencies(id, m);
+      const legacyPackage = contract.paquete_snapshot
+        ? this.packages.contractSnapshot(contract.paquete_snapshot)
+        : null;
+      const [binding] =
+        !legacyPackage && lines.some((l: any) => l.es_paquete)
+          ? await m.query(
+              `SELECT v.contenido FROM propuesta_paquete pp JOIN paquete_version v USING(id_version) WHERE pp.id_propuesta=$1`,
+              [contract.id_propuesta],
+            )
+          : [];
+      if (binding)
+        for (const line of lines)
+          if (line.es_paquete) line.servicio_nombre = binding.contenido.nombre;
+      if (legacyPackage)
+        for (const line of lines)
+          if (line.id_servicio === legacyPackage.idServicio)
+            line.servicio_nombre = legacyPackage.nombre;
       return {
         ...camel(contract),
         propuesta: { ...camel(terms), detalles: lines.map(camel) },
-        editableFinanciero: !locked,
+        paquete: legacyPackage || binding?.contenido || null,
+        editableFinanciero: !locked && !binding && !legacyPackage,
         eliminable: !locked,
       };
     });
@@ -73,11 +95,12 @@ export class ContractsService {
     dto: ContractTermsDto,
     m: EntityManager,
     proposalId?: string,
+    authorizedPackage = false,
   ) {
     const ids = [...new Set(dto.detalles.map((line) => line.idServicio))];
     // Permite conservar líneas históricas de servicios desactivados, sin añadirlos a contratos nuevos.
     const services = await m.query(
-      `SELECT id_servicio,activo FROM servicio WHERE id_servicio=ANY($1::int[]) FOR SHARE`,
+      `SELECT * FROM servicio WHERE id_servicio=ANY($1::int[]) FOR SHARE`,
       [ids],
     );
     const prior = proposalId
@@ -90,10 +113,22 @@ export class ContractsService {
       const service = services.find((item: any) => item.id_servicio === id);
       if (
         !service ||
-        (!service.activo && !prior.some((item: any) => item.id_servicio === id))
+        (service.es_paquete && !authorizedPackage) ||
+        (!service.activo &&
+          !authorizedPackage &&
+          !prior.some((item: any) => item.id_servicio === id))
       )
         throw new BadRequestException(
           'Selecciona servicios activos existentes.',
+        );
+      if (
+        !authorizedPackage &&
+        (await this.packages.isExistingCatalog()) &&
+        (await m.query('SELECT 1 FROM paquete WHERE id_servicio=$1', [id]))
+          .length
+      )
+        throw new BadRequestException(
+          'Selecciona el paquete y su versión; no se permite fijar un precio manual para su servicio asociado.',
         );
     }
     let total = 0n;
@@ -146,8 +181,44 @@ export class ContractsService {
         [dto.idLead],
       );
       if (!lead) throw new NotFoundException('Lead no encontrado.');
-      const p = dto.propuesta;
-      const total = await this.validateTerms(p, m);
+      if (dto.paquete && dto.propuesta)
+        throw new BadRequestException(
+          'Al elegir un paquete envía solo su ID y versión, sin importes manuales.',
+        );
+      const selected = dto.paquete
+        ? await this.packages.forProposal(
+            m,
+            dto.paquete.idServicio,
+            dto.paquete.version,
+          )
+        : null;
+      const snapshot = selected?.paquete;
+      const p: ContractTermsDto = snapshot
+        ? {
+            moneda: snapshot.moneda,
+            modalidad: snapshot.modalidad as ContractTermsDto['modalidad'],
+            tiempoEntregaDias: snapshot.duracionDias,
+            condiciones: [
+              snapshot.descripcion,
+              ...snapshot.entregables.map((s) => 'Entregable: ' + s),
+              ...snapshot.restricciones.map((s) => 'Restricción: ' + s),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            detalles: [
+              {
+                idServicio: snapshot.idServicio,
+                descripcion: snapshot.nombre,
+                cantidad: 1,
+                precioUnitario: snapshot.precioFijo!,
+                descuento: '0.00',
+              },
+            ],
+          }
+        : dto.propuesta!;
+      if (!p)
+        throw new BadRequestException('Selecciona servicios o un paquete.');
+      const total = await this.validateTerms(p, m, undefined, !!snapshot);
       const [proposal] = await m.query(
         `INSERT INTO propuesta(id_lead,id_usuario,estado,modalidad,tiempo_entrega_dias,
         monto_total,moneda,condiciones,fecha_respuesta) VALUES($1,$2,'aceptada',$3,$4,$5,$6,$7,$8) RETURNING id_propuesta`,
@@ -163,6 +234,11 @@ export class ContractsService {
         ],
       );
       await this.lines(m, proposal.id_propuesta, p);
+      if (selected && !selected.legacySnapshot)
+        await m.query(
+          'INSERT INTO propuesta_paquete(id_propuesta,id_version) VALUES($1,$2)',
+          [proposal.id_propuesta, selected.idVersion],
+        );
       const [contract] = await m.query(
         `INSERT INTO contrato(id_lead,id_propuesta,fecha_firma,version_clausulas,acepta_autoria_estudiante,archivo_url)
         VALUES($1,$2,$3,$4,true,$5) RETURNING id_contrato`,
@@ -174,6 +250,11 @@ export class ContractsService {
           dto.archivoUrl || null,
         ],
       );
+      if (selected?.legacySnapshot)
+        await m.query(
+          'UPDATE contrato SET paquete_snapshot=$1 WHERE id_contrato=$2',
+          [JSON.stringify(selected.legacySnapshot), contract.id_contrato],
+        );
       return contract.id_contrato as number;
     });
     return this.detail(id);
@@ -184,8 +265,12 @@ export class ContractsService {
     await this.db.transaction(async (m) => {
       const contract = await this.admin.contrato(id, m, true);
       const locked = await this.dependencies(id, m);
+      const [packageLine] = await m.query(
+        `SELECT 1 FROM propuesta_detalle d JOIN servicio s USING(id_servicio) WHERE d.id_propuesta=$1 AND to_jsonb(s) @> '{"es_paquete":true}'::jsonb LIMIT 1`,
+        [contract.id_propuesta],
+      );
       if (
-        locked &&
+        (locked || packageLine || contract.paquete_snapshot) &&
         (dto.propuesta !== undefined ||
           dto.fechaFirma !== undefined ||
           dto.aceptaAutoriaEstudiante !== undefined)

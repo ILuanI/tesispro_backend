@@ -1,5 +1,5 @@
 import type { Relation } from 'typeorm';
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import { Lead } from './lead.entity.js';
 
 @Entity('enlace_referido')
@@ -9,6 +9,12 @@ export class EnlaceReferido {
 
   @Column({ name: 'id_lead_referente', type: 'bigint' })
   idLeadReferente: string;
+
+  @Column({ name: 'id_cliente', type: 'integer', nullable: true })
+  idCliente: number | null;
+
+  @UpdateDateColumn({ name: 'fecha_actualizacion', type: 'timestamptz' })
+  fechaActualizacion: Date;
 
   @Column({ type: 'varchar', length: 30, unique: true })
   codigo: string;

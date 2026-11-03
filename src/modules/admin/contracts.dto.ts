@@ -47,13 +47,23 @@ export class ContractTermsDto {
   @Type(() => ContractLineDto)
   detalles: ContractLineDto[];
 }
+export class ContractPackageDto {
+  @IsInt() @Min(1) @Max(2147483647) idServicio: number;
+  @IsInt() @Min(1) version: number;
+}
 export class CreateContractDto {
   @IsString() @Matches(/^[1-9]\d{0,18}$/) idLead: string;
+  @ValidateIf((o) => !o.paquete || o.propuesta !== undefined)
   @IsDefined()
   @IsObject()
   @ValidateNested()
   @Type(() => ContractTermsDto)
-  propuesta: ContractTermsDto;
+  propuesta?: ContractTermsDto;
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ContractPackageDto)
+  paquete?: ContractPackageDto;
   @IsISO8601({ strict: true })
   @Matches(/(Z|[+-]\d{2}:\d{2})$/)
   fechaFirma: string;
