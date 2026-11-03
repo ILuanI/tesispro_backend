@@ -20,6 +20,27 @@ export class RecursoGratuito {
   @Column({ name: 'archivo_url', type: 'text' })
   archivoUrl: string;
 
+  @Column({ type: 'varchar', length: 40, default: 'material_propio' })
+  categoria: string;
+
+  @Column({ type: 'varchar', length: 10, default: 'pdf' })
+  formato: string;
+
+  @Column({ name: 'fecha_creacion', type: 'timestamptz', default: () => 'now()' })
+  fechaCreacion: Date;
+
+  @Column({ name: 'fecha_actualizacion', type: 'timestamptz', default: () => 'now()' })
+  fechaActualizacion: Date;
+
+  @Column({ name: 'archivo_nombre', type: 'varchar', length: 255, nullable: true })
+  archivoNombre: string | null;
+
+  @Column({ name: 'archivo_mime', type: 'varchar', length: 100, nullable: true })
+  archivoMime: string | null;
+
+  @Column({ name: 'archivo_contenido', type: 'bytea', nullable: true, select: false })
+  archivoContenido: Buffer | null;
+
   @Column({ name: 'id_etapa', nullable: true })
   idEtapa: number | null;
 
@@ -28,6 +49,12 @@ export class RecursoGratuito {
 
   @Column({ type: 'boolean', default: true })
   activo: boolean;
+
+  @Column({type:'boolean',default:false})
+  publicado: boolean;
+
+  @Column({type:'boolean',default:false})
+  destacado: boolean;
 
   @ManyToOne(() => EtapaTesis, { nullable: true })
   @JoinColumn({ name: 'id_etapa' })

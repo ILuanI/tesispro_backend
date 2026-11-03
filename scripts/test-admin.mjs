@@ -1,3 +1,5 @@
+import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
+import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
 // Integration tests run only inside a newly created, isolated schema and remove it afterwards.
 import 'reflect-metadata';
 import 'dotenv/config';
@@ -13,6 +15,7 @@ import { passwordHash, passwordMatches } from '../dist/modules/admin/auth.js';
 import { monthlySchedule } from '../dist/modules/admin/money.js';
 import { InitialSchema1791855075011 } from '../dist/migrations/1791855075011-InitialSchema.js';
 import { AdminPanel1791900000000 } from '../dist/migrations/1791900000000-AdminPanel.js';
+import { BuyerProfiles1792300000000 } from '../dist/migrations/1792300000000-BuyerProfiles.js';
 import { LeadsModule } from '../dist/modules/leads/leads.module.js';
 import { AppController } from '../dist/app.controller.js';
 import { AppService } from '../dist/app.service.js';
@@ -45,7 +48,13 @@ try {
     schema,
     entities,
     extra: { options: `-c search_path=${schema}` },
-    migrations: [InitialSchema1791855075011, AdminPanel1791900000000],
+    migrations: [
+      InitialSchema1791855075011,
+      AdminPanel1791900000000,
+      BuyerProfiles1792300000000,
+      ResourceLibrary1792200000000,
+      ResourceJourneys1792400000000,
+    ],
     synchronize: false,
   };
   db = new DataSource(options);
@@ -469,7 +478,13 @@ try {
   await app.close();
   app = null;
   await check('Reversión de migración administrativa', async () => {
-    await db.undoLastMigration();
+    // Comprueba esta migración concreta aunque se añadan otras después.
+    const runner = db.createQueryRunner();
+    try {
+      await new AdminPanel1791900000000().down(runner);
+    } finally {
+      await runner.release();
+    }
     assert.equal(
       (
         await db.query(

@@ -1,3 +1,5 @@
+import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
+import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
 import 'reflect-metadata';
 import { config } from 'dotenv';
 import assert from 'node:assert/strict';
@@ -7,6 +9,7 @@ import { entities } from '../dist/entities/index.js';
 import { AdminService } from '../dist/modules/admin/admin.service.js';
 import { InitialSchema1791855075011 } from '../dist/migrations/1791855075011-InitialSchema.js';
 import { AdminPanel1791900000000 } from '../dist/migrations/1791900000000-AdminPanel.js';
+import { BuyerProfiles1792300000000 } from '../dist/migrations/1792300000000-BuyerProfiles.js';
 import { ContractServices1792060000000 } from '../dist/migrations/1792060000000-ContractServices.js';
 import { seedDemo, demoEmails } from './seed-demo.mjs';
 config({ quiet: true });
@@ -34,6 +37,9 @@ try {
       InitialSchema1791855075011,
       AdminPanel1791900000000,
       ContractServices1792060000000,
+      BuyerProfiles1792300000000,
+      ResourceLibrary1792200000000,
+      ResourceJourneys1792400000000,
     ],
   });
   await db.initialize();

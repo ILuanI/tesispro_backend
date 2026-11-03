@@ -1,4 +1,5 @@
 import { Type } from 'class-transformer';
+import { JourneyFilterDto } from './journeys.dto.js';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -30,7 +31,7 @@ export class LoginDto {
   @IsEmail() @MaxLength(150) correo: string;
   @IsString() @MinLength(1) @MaxLength(200) password: string;
 }
-export class ListDto {
+export class ListDto extends JourneyFilterDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
   @IsOptional() @IsString() @MaxLength(150) q?: string;
@@ -66,7 +67,7 @@ export class ListDto {
 export class LeadDto {
   @IsString() @MinLength(1) @MaxLength(100) nombres: string;
   @IsOptional() @IsString() @MaxLength(100) apellidos?: string | null;
-  @IsEmail() @MaxLength(150) correo: string;
+  @IsOptional() @IsEmail() @MaxLength(150) correo?: string | null;
   @IsString() @MinLength(5) @MaxLength(20) telefono: string;
   @IsInt() @Min(1) idEstado: number;
   @IsOptional() @IsInt() @Min(1) idResponsable?: number | null;

@@ -25,8 +25,11 @@ export class Lead {
   @Column({ type: 'varchar', length: 100, nullable: true })
   apellidos: string | null;
 
-  @Column({ type: 'varchar', length: 150, unique: true })
-  correo: string;
+  @Column({ type: 'varchar', length: 150, unique: true, nullable: true })
+  correo: string | null;
+
+  @Column({name:'reserva_pendiente',type:'boolean',default:false})
+  reservaPendiente: boolean;
 
   @Column({ type: 'varchar', length: 20 })
   telefono: string;

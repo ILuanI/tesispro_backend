@@ -6,6 +6,19 @@ import { AdminController } from './admin.controller.js';
 import { AdminService } from './admin.service.js';
 import { ContractsController } from './contracts.controller.js';
 import { ContractsService } from './contracts.service.js';
+import { ResourcesController } from './resources.controller.js';
+import { ResourcesService } from './resources.service.js';
+import {
+  BuyersController,
+  CaptureBuyersController,
+} from './buyers.controller.js';
+import { BuyersService } from './buyers.service.js';
+import { JourneysService } from './journeys.service.js';
+import {
+  PublicResourcesController,
+  ResourceLinksController,
+  JourneysAdminController,
+} from './journeys.controller.js';
 
 @Catch(QueryFailedError)
 class DatabaseErrorFilter implements ExceptionFilter {
@@ -37,11 +50,24 @@ class DatabaseErrorFilter implements ExceptionFilter {
   }
 }
 @Module({
-  controllers: [AuthController, AdminController, ContractsController],
+  controllers: [
+    AuthController,
+    AdminController,
+    ContractsController,
+    ResourcesController,
+    BuyersController,
+    CaptureBuyersController,
+    PublicResourcesController,
+    ResourceLinksController,
+    JourneysAdminController,
+  ],
   providers: [
     AuthService,
     AdminService,
     ContractsService,
+    ResourcesService,
+    BuyersService,
+    JourneysService,
     { provide: APP_GUARD, useClass: AdminGuard },
     { provide: APP_FILTER, useClass: DatabaseErrorFilter },
   ],

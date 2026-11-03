@@ -1,0 +1,15 @@
+export const buyerChannels = [
+  'directo',
+  'busqueda',
+  'facebook',
+  'instagram',
+  'tiktok',
+  'linkedin',
+  'youtube',
+  'whatsapp',
+  'correo',
+  'referido',
+  'convenio_institucional',
+  'web',
+  'otro',
+];

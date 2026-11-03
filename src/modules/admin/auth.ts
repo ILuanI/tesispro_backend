@@ -189,6 +189,7 @@ export class AdminGuard implements CanActivate {
           'cliente',
           'usuario-interno',
           'estado-lead',
+          'recurso-gratuito',
         ].includes(resource)
       ) {
         throw new ForbiddenException(

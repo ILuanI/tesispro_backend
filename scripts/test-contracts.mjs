@@ -1,3 +1,5 @@
+import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
+import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
 // HTTP real y PostgreSQL, exclusivamente en un esquema temporal generado por esta prueba.
 import 'reflect-metadata';
 import { config } from 'dotenv';
@@ -12,6 +14,7 @@ import { AdminModule } from '../dist/modules/admin/admin.module.js';
 import { passwordHash } from '../dist/modules/admin/auth.js';
 import { InitialSchema1791855075011 } from '../dist/migrations/1791855075011-InitialSchema.js';
 import { AdminPanel1791900000000 } from '../dist/migrations/1791900000000-AdminPanel.js';
+import { BuyerProfiles1792300000000 } from '../dist/migrations/1792300000000-BuyerProfiles.js';
 import { ContractServices1792060000000 } from '../dist/migrations/1792060000000-ContractServices.js';
 config({ quiet: true });
 const schema = `contracts_test_${randomBytes(8).toString('hex')}`;
@@ -45,6 +48,9 @@ try {
       InitialSchema1791855075011,
       AdminPanel1791900000000,
       ContractServices1792060000000,
+      BuyerProfiles1792300000000,
+      ResourceLibrary1792200000000,
+      ResourceJourneys1792400000000,
     ],
   };
   db = new DataSource(options);

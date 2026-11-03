@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 import { entities } from '../entities/index.js';
+import { fileURLToPath } from 'node:url';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { entities } from '../entities/index.js';
         namingStrategy: new SnakeNamingStrategy(),
         synchronize: false,
         migrationsRun: config.get<string>('DB_RUN_MIGRATIONS', 'false') === 'true',
-        migrations: ['dist/migrations/*.js'],
+        migrations: [fileURLToPath(new URL('../migrations/*.js', import.meta.url))],
         logging: config.get<string>('DB_LOGGING', 'false') === 'true',
       }),
     }),

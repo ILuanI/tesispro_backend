@@ -22,6 +22,7 @@ import {
 } from '../../common/enums/database.enums.js';
 import { makeKpi, makeRatioKpi, positiveSatisfactionDefinition } from './impulse-kpi.js';
 import { ContractListDto } from './contracts.dto.js';
+import { profileJourneyFilter } from './journey-filters.js';
 
 type Row = Record<string, any>;
 const camel = (row: Row): Row =>
@@ -108,6 +109,8 @@ export class AdminService {
   }
   leads(dto: ListDto) {
     const f = new Filters();
+    const activity=profileJourneyFilter(dto,f.values,'x.id_lead','lead');
+    if(activity)f.clauses.push(activity);
     if (dto.q)
       f.add(
         "(concat_ws(' ',nombres,apellidos) ILIKE ? OR correo ILIKE ? OR telefono ILIKE ?)",
@@ -188,7 +191,7 @@ export class AdminService {
     const fields: Record<string, any> = {
       nombres: dto.nombres.trim(),
       apellidos: dto.apellidos?.trim() || null,
-      correo: dto.correo.trim().toLowerCase(),
+      correo: dto.correo?.trim().toLowerCase() || null,
       telefono: dto.telefono.trim(),
       id_estado: dto.idEstado,
       id_responsable: dto.idResponsable || null,
@@ -201,17 +204,22 @@ export class AdminService {
       nivel_interes: dto.nivelInteres || null,
     };
     return this.db.transaction(async (m) => {
+      await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [fields.correo || fields.telefono]);
+      const [buyer] = await m.query("SELECT id_buyer FROM buyer WHERE correo=$1 AND estado='buyer'", [fields.correo]);
+      if (buyer) throw new ConflictException('Este correo pertenece a un buyer. Convierte su perfil desde Buyers para conservar sus datos.');
       if (id) {
         const [current] = await m.query(
-          'SELECT id_estado FROM lead WHERE id_lead=$1 FOR UPDATE',
+          'SELECT id_estado,reserva_pendiente FROM lead WHERE id_lead=$1 FOR UPDATE',
           [id],
         );
         if (!current) throw new NotFoundException('Lead no encontrado.');
+        if(!fields.correo && !current.reserva_pendiente)throw new BadRequestException('El correo es obligatorio para este lead.');
         if (current.id_estado !== dto.idEstado && !dto.motivo?.trim())
           throw new BadRequestException(
             'Indica el motivo del cambio de estado.',
           );
       }
+      if(!id && !fields.correo)throw new BadRequestException('Ingresa el correo del lead.');
       if (dto.idResponsable) {
         const [responsable] = await m.query(
           'SELECT id_usuario FROM usuario_interno WHERE id_usuario=$1 AND activo=true',
