@@ -17,6 +17,7 @@ import {
   ResourceContactDto,
 } from './journeys.dto.js';
 import { journeyConditions } from './journey-filters.js';
+import { ReferralsService } from './referrals.service.js';
 
 type Row = Record<string, any>;
 const camel = (r: Row) =>
@@ -41,7 +42,7 @@ const published = `activo=true AND publicado=true`;
 
 @Injectable()
 export class JourneysService {
-  constructor(private readonly db: DataSource, private readonly identity: ContactIdentityService) {}
+  constructor(private readonly db: DataSource, private readonly referrals: ReferralsService, private readonly identity: ContactIdentityService) {}
   async publicResources() {
     return this.db.query(
       `SELECT id_recurso AS "idRecurso",titulo,descripcion,categoria,formato FROM recurso_gratuito WHERE ${published} AND destacado=true ORDER BY fecha_actualizacion DESC,id_recurso DESC`,
@@ -202,16 +203,22 @@ export class JourneysService {
       };
     });
   }
-  async contact(token: string, dto: ResourceContactDto) {
+  async contact(token: string, dto: ResourceContactDto, referralToken = '') {
     return this.db.transaction(async (m) => {
       const s = await this.access(m, token);
       if (s.formulario_completado) return { ok: true };
       const telefono = normalizeContactPhone(dto.telefono);
-      const owner=await this.identity.resolve(m,null,telefono);
-      let leadId=owner?.id_lead || null, buyerId=owner?.id_buyer || null;
-      if(!owner) {
-        const [b]=await m.query("INSERT INTO buyer(nombres,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at,procedencia_campos) VALUES($1,$2,$3,'descarga_recurso',$4,now(),$5::jsonb) RETURNING id_buyer",[dto.nombres,telefono,s.canal,s.titulo,JSON.stringify({nombres:{origen:'recursos',confirmado:true},telefono:{origen:'recursos',confirmado:true}})]);
-        buyerId=b.id_buyer;
+      const owner = await this.identity.resolve(m, null, telefono);
+      let created = false;
+      const leadId = owner?.id_lead || null;
+      let buyerId = owner?.id_buyer || null;
+      if (!owner) {
+        const [b] = await m.query(
+          `INSERT INTO buyer(nombres,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at,procedencia_campos) VALUES($1,$2,$3,'descarga_recurso',$4,now(),$5::jsonb) RETURNING id_buyer`,
+          [dto.nombres, telefono, s.canal, s.titulo, JSON.stringify({ nombres: { origen: 'recursos', confirmado: true }, telefono: { origen: 'recursos', confirmado: true } })],
+        );
+        buyerId = b.id_buyer;
+        created = true;
       }
       await m.query(
         'UPDATE solicitud_recurso SET nombres=$1,telefono=$2,id_buyer=$3,id_lead=$4,formulario_completado=now() WHERE id_solicitud=$5',
@@ -222,6 +229,7 @@ export class JourneysService {
         [s.id_sesion],
       );
       await this.event(m, s.id_solicitud, 'formulario_completado', true);
+      if (created && buyerId) await this.referrals.attribute(m, referralToken, buyerId);
       return { ok: true };
     });
   }

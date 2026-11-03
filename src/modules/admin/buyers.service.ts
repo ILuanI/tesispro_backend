@@ -16,6 +16,7 @@ import {
 } from './buyers.dto.js';
 
 import { profileJourneyFilter } from './journey-filters.js';
+import { ReferralsService, referralPhone } from './referrals.service.js';
 import type { ProfilePageDto } from './lead-profile.dto.js';
 
 type Row = Record<string, any>;
@@ -34,7 +35,7 @@ const map = (rows: Row[]) => rows.map(camel);
 
 @Injectable()
 export class BuyersService {
-  constructor(private readonly db: DataSource, private readonly identity:ContactIdentityService) {}
+  constructor(private readonly db: DataSource, private readonly referrals: ReferralsService, private readonly identity:ContactIdentityService) {}
   async catalogos() {
     const [universidades, grados, etapas, estadosLead] = await Promise.all([
       this.db.query(
@@ -393,11 +394,11 @@ export class BuyersService {
       return { ok: true };
     });
   }
-  async capture(dto: CaptureBuyerDto) {
+  async capture(dto: CaptureBuyerDto, referralToken = '') {
     await this.db.transaction(async m=>{
       const owner=await this.identity.resolve(m,dto.correo,dto.telefono);
       let buyer=owner?.id_buyer||null,lead=owner?.id_lead||null;
-      if(!owner){const [b]=await m.query("INSERT INTO buyer(nombres,correo,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at) VALUES($1,$2,$3,$4,'descarga_recurso',$5,now()) RETURNING id_buyer",[dto.nombres,dto.correo,dto.telefono,dto.canalOrigen,dto.recursoInteres]);buyer=b.id_buyer;}
+      if(!owner){const [b]=await m.query("INSERT INTO buyer(nombres,correo,telefono,canal_origen,motivo_captacion,recurso_interes,consentimiento_at) VALUES($1,$2,$3,$4,'descarga_recurso',$5,now()) RETURNING id_buyer",[dto.nombres,dto.correo,dto.telefono,dto.canalOrigen,dto.recursoInteres]);buyer=b.id_buyer; await this.referrals.attribute(m, referralToken, b.id_buyer);}
       await m.query("INSERT INTO evento_perfil(id_buyer,id_lead,tipo,origen,despues) VALUES($1,$2,'captacion','recursos',$3::jsonb)",[buyer,lead,JSON.stringify({canal:dto.canalOrigen,recurso:dto.recursoInteres})]);
     });return {ok:true};
   }

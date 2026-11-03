@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import { AuthService, Public, type AdminRequest } from './auth.js';
 import { BuyerDto, BuyerListDto, CaptureBuyerDto } from './buyers.dto.js';
 import { BuyersService } from './buyers.service.js';
+import { ReferralsService, referralCookie } from './referrals.service.js';
 import { ProfilePageDto } from './lead-profile.dto.js';
 function buyerId(id: string) {
   if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n)
@@ -73,9 +74,11 @@ export class CaptureBuyersController {
   constructor(
     private readonly service: BuyersService,
     private readonly auth: AuthService,
+    private readonly referrals: ReferralsService,
   ) {}
   @Public() @Post() capture(@Body() dto: CaptureBuyerDto, @Req() req: Request) {
     this.auth.checkOrigin(req);
-    return this.service.capture(dto);
+    if (referralCookie(req)) this.referrals.limit(req.ip || 'unknown');
+    return this.service.capture(dto, referralCookie(req));
   }
 }

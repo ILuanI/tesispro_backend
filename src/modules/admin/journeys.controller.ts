@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService, Public, type AdminRequest } from './auth.js';
+import { ReferralsService, referralCookie } from './referrals.service.js';
 import { JourneysService } from './journeys.service.js';
 import {
   AttributionDto,
@@ -43,6 +44,7 @@ export class PublicResourcesController {
     private readonly service: JourneysService,
     private readonly auth: AuthService,
     private readonly capture: CaptureProfileService,
+    private readonly referrals: ReferralsService,
   ) {}
   @Get() list() {
     return this.service.publicResources();
@@ -56,8 +58,10 @@ export class PublicResourcesController {
     @Body() dto: ResourceContactDto,
   ) {
     this.auth.checkOrigin(req);
+    const referral = referralCookie(req);
+    if (referral) this.referrals.limit(req.ip || 'unknown');
     const session=await this.capture.open(cookieToken(req.headers.cookie));
-    await this.service.contact(token(req), dto);
+    await this.service.contact(token(req), dto, referral);
     await this.capture.linkResource(session.token,token(req));
     setContactCookie(res,session.token);
     return {ok:true};
