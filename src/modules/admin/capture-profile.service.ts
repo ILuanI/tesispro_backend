@@ -480,7 +480,7 @@ export class CaptureProfileService {
       );
       const interpretation = result.interpretacionR7;
       if (interpretation) {
-        const qualification = await this.qualification.evaluate(m, turn.id_conversacion, dto.idTurno, session.id_lead, session.id_buyer, result.interpretacionR7);
+        const qualification = await this.qualification.evaluate(m, turn.id_conversacion, dto.idTurno, session.id_lead, session.id_buyer, result.interpretacionR7, result.state.packageVersion);
         result.calificacion = qualification;
         delete result.interpretacionR7;
         if (!qualification.suficiente || !qualification.servicio || result.state.service !== qualification.servicio) {

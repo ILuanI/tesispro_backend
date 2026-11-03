@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { EntityManager } from 'typeorm';
+import { PackagesService } from './packages.service.js';
 
 const levels = ['intencion_contratacion', 'alto', 'medio', 'bajo'];
 const signals = ['intencion_contratar', 'consulta_precio', 'consulta_modalidad', 'consulta_plazo', 'consulta_propuesta', 'necesidad', 'solicita_asesor'];
@@ -14,7 +15,7 @@ type Interpretation = { campos: Record<string, Item>; senales: Record<string, It
 export class TesiQualificationService {
   private config: any;
   private version = '';
-  constructor() {
+  constructor(private readonly packages: PackagesService) {
     try {
       const raw = readFileSync(process.env.R7_RULES_FILE || resolve(process.cwd(), 'config/tesi-qualification.json'), 'utf8');
       const cfg = JSON.parse(raw);
@@ -26,7 +27,7 @@ export class TesiQualificationService {
       console.error('No se pudo cargar la configuración de clasificación de Tesi:', error instanceof Error ? error.message : 'error');
     }
   }
-  async evaluate(m: EntityManager, conversation: string, turn: string, lead: string | null, buyer: string | null, incoming: Interpretation) {
+  async evaluate(m: EntityManager, conversation: string, turn: string, lead: string | null, buyer: string | null, incoming: Interpretation, packageVersion?: number | null) {
     if (!this.config) throw new ServiceUnavailableException('Configuración de clasificación de Tesi inválida.');
     if (!incoming || typeof incoming.campos !== 'object' || typeof incoming.senales !== 'object') throw new BadRequestException('Interpretación inválida.');
     if (!Object.keys(incoming.campos).length && !Object.keys(incoming.senales).length) throw new BadRequestException('No hay evidencia para clasificar.');
@@ -55,8 +56,18 @@ export class TesiQualificationService {
     const suficiente = !!campos.necesidad && !!campos.etapa;
     let servicio: string | null = null;
     if (suficiente && typeof campos.servicio?.valor === 'string') {
-      const [found] = await m.query('SELECT codigo FROM servicio WHERE codigo=$1 AND activo=true', [campos.servicio.valor]);
-      servicio = found?.codigo || null;
+      const packageId = /^paquete-([1-9]\d*)$/.exec(campos.servicio.valor);
+      if (packageId && Number.isSafeInteger(Number(packageId[1])) && Number.isInteger(packageVersion) && Number(packageVersion) > 0) {
+        try {
+          await this.packages.forProposal(m, Number(packageId[1]), Number(packageVersion));
+          servicio = campos.servicio.valor;
+        } catch (error) {
+          if (!(error instanceof Error) || error.name !== 'ConflictException') throw error;
+        }
+      } else if (!packageId) {
+        const [found] = await m.query('SELECT codigo FROM servicio WHERE codigo=$1 AND activo=true', [campos.servicio.valor]);
+        servicio = found?.codigo || null;
+      }
     }
     const resultado = { esquema: 1, nivel, campos, senales, motivos: active, suficiente, servicio, versionReglas: this.version };
     await m.query('INSERT INTO calificacion_tesi(id_conversacion,id_turno,id_lead,id_buyer,resultado,version_reglas) VALUES($1,$2,$3,$4,$5::jsonb,$6)', [conversation, turn, lead, buyer, JSON.stringify(resultado), this.version]);

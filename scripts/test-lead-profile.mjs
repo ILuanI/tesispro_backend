@@ -195,6 +195,26 @@ try {
   const confirmResult = { state: {}, reply: 'Gracias.', interpretacionR7: { campos: { necesidad: { valor: 'análisis estadístico', tipo: 'confirmado', evidencias: [...ev, { idMensaje: String(confirmBegin.evidencias.at(-1).idMensaje), fragmento: confirmTurn.mensaje }] } }, senales: {} } };
   const confirmed = await call('/internal/tesi/finish', 'POST', { ...confirmTurn, respuesta: confirmResult.reply, resultadoJson: JSON.stringify(confirmResult) }, 201, bridge);
   assert.equal(confirmed.resultado.calificacion.campos.necesidad.tipo, 'confirmado');
+  const packageCatalogs = await call('/admin/paquetes/catalogos');
+  const pkg = await call('/admin/paquetes', 'POST', {
+    codigo: 'R7_PAQUETE', nombre: 'Paquete de prueba', descripcion: 'Asesoría estadística', publicoObjetivo: null,
+    componentes: [{ idServicio: packageCatalogs.servicios[0].idServicio, cantidad: 1 }],
+    entregables: ['Informe'], restricciones: ['Sujeto a evaluación'], precioFijo: '250.00', moneda: 'PEN', modalidad: 'virtual',
+    duracionDias: null, vigenciaDesde: null, vigenciaHasta: null, estado: 'activo',
+  }, 201);
+  const pkgTurn = { idTurno: randomUUID(), mensaje: 'Quiero revisar el paquete de estadística.' };
+  const pkgBegin = await call('/internal/tesi/begin', 'POST', pkgTurn, 201, bridge);
+  const pkgId = `paquete-${pkg.idServicio}`;
+  const pkgResult = { state: { service: pkgId, packageVersion: pkg.version }, reply: 'Paquete disponible.', interpretacionR7: { campos: { servicio: { valor: pkgId, evidencias: [{ idMensaje: String(pkgBegin.evidencias.at(-1).idMensaje), fragmento: pkgTurn.mensaje }] } }, senales: {} } };
+  const pkgSaved = await call('/internal/tesi/finish', 'POST', { ...pkgTurn, respuesta: pkgResult.reply, resultadoJson: JSON.stringify(pkgResult) }, 201, bridge);
+  assert.equal(pkgSaved.resultado.calificacion.servicio, pkgId);
+  await call(`/admin/paquetes/${pkg.idServicio}/estado`, 'PATCH', { estado: 'inactivo', version: pkg.version });
+  const expiredTurn = { idTurno: randomUUID(), mensaje: '¿Sigue disponible el paquete de estadística?' };
+  const expiredBegin = await call('/internal/tesi/begin', 'POST', expiredTurn, 201, bridge);
+  const expiredResult = { state: { service: pkgId, packageVersion: pkg.version }, reply: 'Paquete disponible.', interpretacionR7: { campos: { servicio: { valor: pkgId, evidencias: [{ idMensaje: String(expiredBegin.evidencias.at(-1).idMensaje), fragmento: expiredTurn.mensaje }] } }, senales: {} } };
+  const expired = await call('/internal/tesi/finish', 'POST', { ...expiredTurn, respuesta: expiredResult.reply, resultadoJson: JSON.stringify(expiredResult) }, 201, bridge);
+  assert.equal(expired.resultado.calificacion.servicio, null);
+  assert.equal(expired.resultado.state.service, null);
   const humanTurn = { idTurno: randomUUID(), mensaje: 'Quiero hablar con un asesor' };
   const humanBegin = await call('/internal/tesi/begin', 'POST', humanTurn, 201, bridge);
   const humanResult = { state: { humanRequested: true }, reply: 'Puedes continuar con un asesor.', interpretacionR7: { campos: {}, senales: { solicita_asesor: { valor: true, evidencias: [{ idMensaje: String(humanBegin.evidencias.at(-1).idMensaje), fragmento: humanTurn.mensaje }] } } } };
@@ -226,7 +246,7 @@ try {
     },
     201,
   );
-  const events = await call(`/admin/leads/${id}/interacciones`);
+  const events = await call(`/admin/leads/${id}/interacciones?pageSize=100`);
   assert(events.total >= 5);
   const audit = events.items.find((event) =>
     event.tipo === 'perfil_editado' && event.detalle.antes?.laboral?.horas_libres_semana === 5,
