@@ -1,8 +1,14 @@
+import { PaymentVerificationService } from './payment-verification.service.js';
+import { PaymentVerificationController } from './payment-verification.controller.js';
+import { PaymentSchedulesService } from './payment-schedules.service.js';
+import { PaymentSchedulesController } from './payment-schedules.controller.js';
 import { ContactIdentityService } from './contact-identity.service.js';
+import { CommercialProposalService } from './commercial-proposal.service.js';
+import { CommercialProposalController } from './commercial-proposal.controller.js';
 import { TesiQualificationService } from './tesi-qualification.service.js';
 import { LeadProfileService } from './lead-profile.service.js';
 import { CaptureProfileService } from './capture-profile.service.js';
-import { LeadProfileController, CaptureProfileController, TesiProfileController } from './lead-profile.controller.js';
+import { LeadProfileController, CaptureProfileController, TesiProfileController, ConversationQualificationController } from './lead-profile.controller.js';
 import { ArgumentsHost, Catch, ExceptionFilter, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { QueryFailedError } from 'typeorm';
@@ -60,11 +66,14 @@ class DatabaseErrorFilter implements ExceptionFilter {
 }
 @Module({
   controllers: [
+    PaymentVerificationController,
+    PaymentSchedulesController,
+    CommercialProposalController,
     PackagesController, PublicPackagesController,
     ReferralsController,
     PublicReferralsController,
     AuthController,
-    LeadProfileController, CaptureProfileController, TesiProfileController,
+    LeadProfileController, CaptureProfileController, TesiProfileController, ConversationQualificationController,
     AdminController,
     ContractsController,
     ResourcesController,
@@ -75,6 +84,9 @@ class DatabaseErrorFilter implements ExceptionFilter {
     JourneysAdminController,
   ],
   providers: [
+    PaymentVerificationService,
+    PaymentSchedulesService,
+    CommercialProposalService,
     PackagesService,
     ReferralsService,
     AuthService,

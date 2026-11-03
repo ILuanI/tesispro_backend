@@ -60,7 +60,7 @@ export class ThesisProjectDto {
 }
 export class ProfilePageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000000) page = 1;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 10;
 }
 export class FollowUpDto {
   @IsInt() @Min(1) revision: number;
@@ -85,6 +85,12 @@ export class HandoffUpdateDto {
   @IsIn(['pendiente', 'en_atencion', 'resuelta']) estado: string;
   @IsOptional() @IsInt() @Min(1) idUsuarioAsignado?: number | null;
   @IsOptional() @IsString() @MaxLength(5000) resolucion?: string | null;
+}
+export class QualificationReviewDto {
+  @IsInt() @Min(1) revision: number;
+  @IsIn(['campos', 'senales', 'objeciones']) grupo: string;
+  @IsString() @Matches(/^[a-z_]{1,40}$/) campo: string;
+  @IsIn(['aceptar', 'rechazar']) accion: string;
 }
 export class CaptureProfileDto extends AttributionDto {
   @IsUUID() clave: string;

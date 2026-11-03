@@ -24,6 +24,7 @@ import { LoginDto } from './admin.dto.js';
 
 const derive = promisify(scrypt);
 export const Public = () => SetMetadata('adminPublic', true);
+export const PaymentRoles = (...roles:string[]) => SetMetadata('paymentRoles', roles);
 export interface AdminUser {
   idUsuario: number;
   nombres: string;
@@ -94,7 +95,7 @@ export class AuthService {
       dto.password,
       row?.password_hash || null,
     );
-    if (!matches || !row.activo || row.rol !== 'administrador')
+    if (!matches || !row.activo || !['administrador','asesor_comercial'].includes(row.rol))
       throw new UnauthorizedException('Correo o contraseña incorrectos.');
     const token = randomBytes(32).toString('hex');
     await this.db.transaction(async (manager) => {
@@ -133,7 +134,7 @@ export class AuthService {
       throw new UnauthorizedException('Inicia sesión para continuar.');
     const [row] = await this.db.query(
       `SELECT u.* FROM sesion_admin s JOIN usuario_interno u USING(id_usuario)
-      WHERE token_hash=$1 AND expires_at>now() AND u.activo=true AND u.rol='administrador'`,
+      WHERE token_hash=$1 AND expires_at>now() AND u.activo=true AND u.rol IN ('administrador','asesor_comercial')`,
       [digest(token)],
     );
     if (!row)
@@ -175,6 +176,8 @@ export class AdminGuard implements CanActivate {
     )
       return true;
     req.admin = await this.auth.authenticate(req);
+    const roles=this.reflector.getAllAndOverride<string[]>('paymentRoles',[ctx.getHandler(),ctx.getClass()])??['administrador'];
+    if(!roles.includes(req.admin.rol)) throw new ForbiddenException('Tu rol no tiene acceso a esta operación.');
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       this.auth.checkOrigin(req);
       const resource = req.path.split('/')[1];
@@ -183,7 +186,7 @@ export class AdminGuard implements CanActivate {
           'perfil-academico','perfil-laboral','proyecto-tesis','proyecto-necesidad','conversacion','mensaje','seguimiento','sesion-landing','descarga-recurso','derivacion-humana',
           'lead',
           'lead-estado-historial',
-          'pago',
+          'pago', 'pago-evento', 'pago-comprobante', 'pago-rectificacion', 'cronograma-pago', 'cuota-pago', 'cronograma-version', 'modalidad-pago', 'cuota-entrega', 'cronograma-evento',
           'contrato',
           'propuesta',
           'propuesta-detalle',
@@ -224,11 +227,12 @@ export class AuthController {
     return this.auth.login(dto, req, res);
   }
   @Post('logout')
+  @PaymentRoles('administrador','asesor_comercial')
   @HttpCode(200)
   logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     return this.auth.logout(req, res);
   }
-  @Get('me') me(@Req() req: AdminRequest) {
+  @Get('me') @PaymentRoles('administrador','asesor_comercial') me(@Req() req: AdminRequest) {
     return req.admin;
   }
 }

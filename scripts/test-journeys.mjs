@@ -1,3 +1,4 @@
+import { currentMigrations } from './test-migrations.mjs';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 // API y navegador contra PostgreSQL real, siempre en un esquema temporal.
@@ -51,15 +52,7 @@ try {
     entities,
     extra: { options: `-c search_path=${schema}` },
     synchronize: false,
-    migrations: [
-      InitialSchema1791855075011,
-      AdminPanel1791900000000,
-      ResourceLibrary1792200000000,
-      BuyerProfiles1792300000000,
-      ResourceJourneys1792400000000,
-      LeadProfiling1792500000000,
-      TesiQualification1792600000000,
-    ],
+    migrations: currentMigrations,
   };
   db = new DataSource(options);
   await db.initialize();
@@ -597,7 +590,7 @@ try {
     await context.addCookies([
       { name: cookie.split('=')[0], value: cookie.split('=')[1], url: origin },
     ]);
-    const output = resolve('../tesispro_frontend/.artifacts/journeys');
+    const output = resolve('../tesispro-landing/.artifacts/journeys');
     await mkdir(output, { recursive: true });
     await check(
       'Navegador: enlace social, nombre y teléfono, descarga, agenda y confirmación',

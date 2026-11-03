@@ -1,4 +1,11 @@
+import { PaymentLegacyChecks1792910000000 } from '../dist/migrations/1792910000000-PaymentLegacyChecks.js';
+import { PaymentVerification1792900000000 } from '../dist/migrations/1792900000000-PaymentVerification.js';
+import { verifiedFixturePayment, historicalPaymentFixture } from './payment-test-helpers.mjs';
+import { PaymentActivationGuard1792810000000 } from '../dist/migrations/1792810000000-PaymentActivationGuard.js';
+import { scheduleFixtureBody, approveFixtureSchedule } from './payment-test-helpers.mjs';
+import { FlexiblePaymentSchedules1792800000000 } from '../dist/migrations/1792800000000-FlexiblePaymentSchedules.js';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { CommercialProposals1792700000000 } from '../dist/migrations/1792700000000-CommercialProposals.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
 import { ResourceLibrary1792200000000 } from '../dist/migrations/1792200000000-ResourceLibrary.js';
@@ -55,6 +62,11 @@ try {
       ResourceJourneys1792400000000,
       LeadProfiling1792500000000,
       TesiQualification1792600000000,
+      CommercialProposals1792700000000,
+      FlexiblePaymentSchedules1792800000000,
+      PaymentActivationGuard1792810000000,
+      PaymentVerification1792900000000,
+      PaymentLegacyChecks1792910000000,
     ],
   };
   db = new DataSource(options);
@@ -102,7 +114,9 @@ try {
   process.env.APP_ORIGIN = origin;
   let cookie = '';
   async function http(path, method = 'GET', body, extra = {}) {
-    const res = await fetch(`${base}${path}`, {
+    body=await scheduleFixtureBody(db,path,method,body);
+    const isFixturePayment=cookie && method==='POST' && /^\/admin\/cuotas\/\d+\/abonos$/.test(path);
+    const res = isFixturePayment ? await verifiedFixturePayment(db,base,path,body,{Origin:origin,Cookie:cookie,...extra}) : await fetch(`${base}${path}`, {
       method,
       headers: {
         Origin: origin,
@@ -112,6 +126,7 @@ try {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    await approveFixtureSchedule(base,cookie,origin,path,method,res);
     return { status: res.status, data: await res.json(), res };
   }
   async function expect(path, method, body, status = 200) {
@@ -464,7 +479,7 @@ try {
         'confirmado',
       ]) {
         const c = await create();
-        await db.query(
+        await historicalPaymentFixture(db,
           "INSERT INTO pago(id_contrato,id_lead,monto,moneda,estado) VALUES($1,$2,1,'PEN',$3)",
           [c.idContrato, lead.idLead, state],
         );

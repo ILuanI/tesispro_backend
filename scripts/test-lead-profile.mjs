@@ -1,3 +1,4 @@
+import { developmentUiProxy } from './development-ui-proxy.mjs';
 import 'reflect-metadata';
 import 'dotenv/config';
 import assert from 'node:assert/strict';
@@ -6,8 +7,6 @@ import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { readdir } from 'node:fs/promises';
@@ -18,7 +17,7 @@ import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-Lea
 
 const schema = 'r6_test_' + randomBytes(8).toString('hex');
 const control = new DataSource({ ...source.options, migrations: [] });
-let db, app, frontend, browser;
+let db, app, uiProxy, browser;
 try {
   await control.initialize();
   await control.query(`CREATE SCHEMA ${schema}`);
@@ -65,6 +64,7 @@ try {
     return data;
   }
   await call('/admin/leads', 'GET', undefined, 401);
+  await call('/admin/propuestas-comerciales/catalogo', 'GET', undefined, 401);
   await call('/auth/login', 'POST', {
     correo: 'r6@example.test',
     password: 'profile-test-123',
@@ -171,7 +171,7 @@ try {
   const begun = await call('/internal/tesi/begin', 'POST', r7turn, 201, bridge);
   const msg = begun.evidencias.at(-1).idMensaje;
   const ev = [{ idMensaje: String(msg), fragmento: 'análisis estadístico' }];
-  const r7result = { state: { need: 'análisis estadístico', thesisStage: 'desarrollo', service: 'puntual' }, reply: 'Orientación', interpretacionR7: { campos: { necesidad: { valor: 'análisis estadístico', evidencias: ev }, etapa: { valor: 'desarrollo', evidencias: [{ idMensaje: String(msg), fragmento: 'tesis en desarrollo' }] }, servicio: { valor: 'puntual', evidencias: ev } }, senales: { consulta_precio: { valor: true, evidencias: [{ idMensaje: String(msg), fragmento: 'saber el precio' }] } } } };
+  const r7result = { state: { need: 'análisis estadístico', thesisStage: 'desarrollo', service: 'puntual' }, reply: 'Orientación', interpretacionR7: { campos: { necesidad: { valor: 'análisis estadístico', evidencias: ev }, etapa: { valor: 'desarrollo', tipo: 'declarado', evidencias: [{ idMensaje: String(msg), fragmento: 'tesis en desarrollo' }] }, servicio: { valor: 'puntual', evidencias: ev } }, senales: { consulta_precio: { valor: true, evidencias: [{ idMensaje: String(msg), fragmento: 'saber el precio' }] } } } };
   const r7body = { ...r7turn, respuesta: r7result.reply, resultadoJson: JSON.stringify(r7result) };
   const bad = structuredClone(r7result);
   bad.interpretacionR7.campos.necesidad.evidencias[0].fragmento = 'cita inventada';
@@ -180,34 +180,180 @@ try {
   const wrongRole = structuredClone(r7result);
   wrongRole.interpretacionR7.campos.necesidad.evidencias[0] = { idMensaje: String(assistantMessage.id_mensaje), fragmento: assistantMessage.contenido };
   await call('/internal/tesi/finish', 'POST', { ...r7body, resultadoJson: JSON.stringify(wrongRole) }, 400, bridge);
+  const [otherSession] = await db.query("INSERT INTO sesion_landing(canal_origen) VALUES('directo') RETURNING id_sesion");
+  const [otherConversation] = await db.query("INSERT INTO conversacion(id_sesion,canal) VALUES($1,'web_chat') RETURNING id_conversacion", [otherSession.id_sesion]);
+  const [otherMessage] = await db.query("INSERT INTO mensaje(id_conversacion,remitente,contenido) VALUES($1,'lead','análisis estadístico') RETURNING id_mensaje", [otherConversation.id_conversacion]);
+  const wrongConversation = structuredClone(r7result);
+  wrongConversation.interpretacionR7.campos.necesidad.evidencias[0].idMensaje = String(otherMessage.id_mensaje);
+  await call('/internal/tesi/finish', 'POST', { ...r7body, resultadoJson: JSON.stringify(wrongConversation) }, 400, bridge);
   const qualified = await call('/internal/tesi/finish', 'POST', r7body, 201, bridge);
   assert.equal(qualified.resultado.calificacion.nivel, 'alto');
   assert.equal(qualified.resultado.calificacion.servicio, 'puntual');
-  assert(qualified.resultado.quickReplies.includes('Confirmo: análisis estadístico'));
+  const [r8service] = await db.query("SELECT id_servicio FROM servicio WHERE codigo='puntual'");
+  const [r8other] = await db.query("SELECT id_servicio FROM servicio WHERE codigo='etapas'");
+  await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', {componentes:[{idServicio:r8service.id_servicio,cantidad:1}]}, 400);
+  await call(`/admin/propuestas-comerciales/catalogo/servicios/${r8service.id_servicio}`, 'PUT', { precio:'125.50', moneda:'PEN', activo:true, plazoDias:7, entregables:['Asesoría'], condiciones:'Modalidad virtual', descuentoMax:0 });
+  await call(`/admin/propuestas-comerciales/catalogo/servicios/${r8other.id_servicio}`, 'PUT', { precio:'100.00', moneda:'USD', activo:true, entregables:['Etapa'], condiciones:'Modalidad virtual', descuentoMax:0 });
+  const twoLines = {componentes:[{idServicio:r8service.id_servicio,cantidad:1},{idServicio:r8other.id_servicio,cantidad:1}]};
+  await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', twoLines, 400);
+  await call(`/admin/propuestas-comerciales/catalogo/servicios/${r8other.id_servicio}`, 'PUT', { precio:'100.00', moneda:'PEN', activo:true, entregables:['Etapa'], condiciones:'Modalidad virtual', descuentoMax:0, revision:1 });
+  await call('/admin/propuestas-comerciales/catalogo/incompatibilidad', 'PUT', {primero:r8service.id_servicio,segundo:r8other.id_servicio,incompatible:true});
+  await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', twoLines, 400);
+  const aiFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, init) => String(url).includes('/api/internal/proposal') ? Response.json({error:'no disponible'},{status:503}) : aiFetch(url, init);
+    const [{n:beforeR8}] = await db.query('SELECT count(*)::int n FROM r8_propuesta');
+    await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', { componentes:[{idServicio:r8service.id_servicio,cantidad:1}] }, 503);
+    assert.equal((await db.query('SELECT count(*)::int n FROM r8_propuesta'))[0].n,beforeR8);
+    globalThis.fetch = async (url, init) => String(url).includes('/api/internal/proposal') ? Response.json({texto:'Acompañamiento para el análisis estadístico.',ids:[r8service.id_servicio]}) : aiFetch(url, init);
+    const recommendation = await call(`/admin/propuestas-comerciales/lead/${id}/recomendaciones`, 'POST', {}, 201);
+    assert.deepEqual(recommendation.ids,[r8service.id_servicio]);
+    const proposal = await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', { componentes:[{idServicio:r8service.id_servicio,cantidad:2}], descuentoPorcentaje:10, motivoExcepcion:'Solicitud comercial' }, 201);
+    assert.equal(proposal.contenido.total, '225.90');
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:1, accion:'aprobar_excepcion' }, 201);
+    const second = await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/lead/${id}`, 'PATCH', { revision:1, componentes:[{idServicio:r8service.id_servicio,cantidad:2}], descuentoPorcentaje:10, motivoExcepcion:'Solicitud comercial', textoManual:'Asesoría académica personalizada.' });
+    assert.equal(second.version,2);
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:1, accion:'revisar' }, 409);
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:2, accion:'revisar' }, 409);
+    const versions = await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}`);
+    assert.equal(versions.versiones.length,2);
+    assert.equal(versions.versiones[1].contenido.total,'225.90');
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:2, accion:'aprobar_excepcion' }, 201);
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:2, accion:'revisar' }, 201);
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:2, accion:'presentar' }, 201);
+    await call(`/admin/propuestas-comerciales/${proposal.idPropuesta}/acciones`, 'POST', { version:2, accion:'aceptar' }, 201);
+    const agreement = await call('/admin/contratos', 'POST', {idLead:id,idPropuestaR8:proposal.idPropuesta,fechaFirma:new Date().toISOString(),versionClausulas:'1.0',aceptaAutoriaEstudiante:true},201);
+    assert.equal(agreement.idPropuesta, proposal.idPropuesta);
+    assert.equal(agreement.propuesta.montoTotal, '225.90');
+    const changes = await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', { componentes:[{idServicio:r8service.id_servicio,cantidad:1}] }, 201);
+    await call('/admin/contratos', 'POST', {idLead:id,idPropuestaR8:changes.idPropuesta,fechaFirma:new Date().toISOString(),versionClausulas:'1.0',aceptaAutoriaEstudiante:true},409);
+    await call(`/admin/propuestas-comerciales/${changes.idPropuesta}/acciones`, 'POST', {version:1,accion:'revisar'},201);
+    await call(`/admin/propuestas-comerciales/${changes.idPropuesta}/acciones`, 'POST', {version:1,accion:'presentar'},201);
+    await call(`/admin/propuestas-comerciales/${changes.idPropuesta}/acciones`, 'POST', {version:1,accion:'solicitar_cambios',motivo:'Ampliar alcance'},201);
+    assert((await db.query('SELECT fecha_respuesta FROM propuesta WHERE id_propuesta=$1',[changes.idPropuesta]))[0].fecha_respuesta);
+    const newVersion = await call(`/admin/propuestas-comerciales/${changes.idPropuesta}/lead/${id}`, 'PATCH', {revision:1,componentes:[{idServicio:r8service.id_servicio,cantidad:1}],textoManual:'Asesoría académica personalizada.'});
+    assert.equal(newVersion.version,2);
+  } finally { globalThis.fetch=aiFetch; }
+  assert.equal(qualified.resultado.calificacion.campos.etapa.tipo, 'declarado');
+  assert(qualified.resultado.quickReplies.includes('Confirmo necesidad: análisis estadístico'));
   await call('/internal/tesi/finish', 'POST', r7body, 201, bridge);
   lead = await call(`/admin/leads/${id}`);
   assert.equal(lead.calificaciones.length, 1);
   assert.equal(lead.perfilAcademico.universidadOtra, 'Sugerencia IA');
+  const qualificationId = lead.calificaciones[0].idCalificacion;
+  await call(`/admin/leads/${id}/calificaciones/${qualificationId}/revision`, 'POST', { revision: lead.revision, grupo: 'campos', campo: 'necesidad', accion: 'aceptar' }, 201);
+  await call(`/admin/leads/${id}/calificaciones/${qualificationId}/revision`, 'POST', { revision: lead.revision, grupo: 'campos', campo: 'necesidad', accion: 'rechazar' }, 409);
+  lead = await call(`/admin/leads/${id}`);
+  assert.equal(lead.calificaciones[0].revisiones[0].accion, 'aceptar');
+  assert.equal(lead.perfilAcademico.universidadOtra, 'Sugerencia IA');
   const exposed = await call(`/admin/leads/${id}/conversaciones/${lead.conversaciones[0].idConversacion}/calificacion`);
   assert.equal(exposed.resultado.nivel, 'alto');
-  const confirmTurn = { idTurno: randomUUID(), mensaje: 'Confirmo: análisis estadístico' };
+  const confirmTurn = { idTurno: randomUUID(), mensaje: 'Confirmo necesidad: análisis estadístico' };
   const confirmBegin = await call('/internal/tesi/begin', 'POST', confirmTurn, 201, bridge);
   const confirmResult = { state: {}, reply: 'Gracias.', interpretacionR7: { campos: { necesidad: { valor: 'análisis estadístico', tipo: 'confirmado', evidencias: [...ev, { idMensaje: String(confirmBegin.evidencias.at(-1).idMensaje), fragmento: confirmTurn.mensaje }] } }, senales: {} } };
   const confirmed = await call('/internal/tesi/finish', 'POST', { ...confirmTurn, respuesta: confirmResult.reply, resultadoJson: JSON.stringify(confirmResult) }, 201, bridge);
   assert.equal(confirmed.resultado.calificacion.campos.necesidad.tipo, 'confirmado');
+  const stageTurn = { idTurno: randomUUID(), mensaje: 'Confirmo etapa: desarrollo' };
+  const stageBegin = await call('/internal/tesi/begin', 'POST', stageTurn, 201, bridge);
+  const stageResult = { state: {}, reply: 'Gracias.', interpretacionR7: { campos: { etapa: { valor: 'desarrollo', tipo: 'confirmado', evidencias: [...r7result.interpretacionR7.campos.etapa.evidencias, { idMensaje: String(stageBegin.evidencias.at(-1).idMensaje), fragmento: stageTurn.mensaje }] } }, senales: {} } };
+  const stageConfirmed = await call('/internal/tesi/finish', 'POST', { ...stageTurn, respuesta: stageResult.reply, resultadoJson: JSON.stringify(stageResult) }, 201, bridge);
+  assert.equal(stageConfirmed.resultado.calificacion.campos.etapa.tipo, 'confirmado');
+  const universityTurn = { idTurno: randomUUID(), mensaje: 'Mi universidad es Universidad Alternativa.' };
+  const universityBegin = await call('/internal/tesi/begin', 'POST', universityTurn, 201, bridge);
+  const universityEvidence = [{ idMensaje: String(universityBegin.evidencias.at(-1).idMensaje), fragmento: 'Universidad Alternativa' }];
+  const universityResult = { state: { university: 'Universidad Alternativa' }, reply: 'Anotado.', interpretacionR7: { campos: { universidad: { valor: 'Universidad Alternativa', tipo: 'declarado', evidencias: universityEvidence } }, senales: {} } };
+  const universitySaved = await call('/internal/tesi/finish', 'POST', { ...universityTurn, respuesta: universityResult.reply, resultadoJson: JSON.stringify(universityResult) }, 201, bridge);
+  assert.equal(universitySaved.resultado.calificacion.campos.universidad.tipo, 'declarado');
+  assert(universitySaved.resultado.quickReplies.includes('Confirmo universidad: Universidad Alternativa'));
+  assert.equal((await call(`/admin/leads/${id}`)).perfilAcademico.universidadOtra, 'Sugerencia IA');
   const packageCatalogs = await call('/admin/paquetes/catalogos');
+  const puntual = packageCatalogs.servicios.find(s => s.codigo === 'puntual');
+  assert(puntual);
   const pkg = await call('/admin/paquetes', 'POST', {
     codigo: 'R7_PAQUETE', nombre: 'Paquete de prueba', descripcion: 'Asesoría estadística', publicoObjetivo: null,
-    componentes: [{ idServicio: packageCatalogs.servicios[0].idServicio, cantidad: 1 }],
+    componentes: [{ idServicio: puntual.idServicio, cantidad: 1 }],
     entregables: ['Informe'], restricciones: ['Sujeto a evaluación'], precioFijo: '250.00', moneda: 'PEN', modalidad: 'virtual',
     duracionDias: null, vigenciaDesde: null, vigenciaHasta: null, estado: 'activo',
   }, 201);
+  await call(`/admin/propuestas-comerciales/catalogo/paquetes/${pkg.idServicio}/opcionales`, 'PUT', {servicios:[r8other.id_servicio]}, 400);
+  await call('/admin/propuestas-comerciales/catalogo/incompatibilidad', 'PUT', {primero:r8service.id_servicio,segundo:r8other.id_servicio,incompatible:false});
+  await call(`/admin/propuestas-comerciales/catalogo/paquetes/${pkg.idServicio}/opcionales`, 'PUT', {servicios:[r8other.id_servicio]});
+  const packageFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, init) => String(url).includes('/api/internal/proposal') ? Response.json({texto:'Asesoría académica personalizada.',ids:[r8service.id_servicio,r8other.id_servicio]}) : packageFetch(url, init);
+    const composed = await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', {idPaquete:pkg.idServicio,versionPaquete:pkg.version,componentes:[{idServicio:r8service.id_servicio,cantidad:1},{idServicio:r8other.id_servicio,cantidad:1}]}, 201);
+    assert.equal(composed.contenido.total,'225.50');
+    assert.equal(composed.contenido.componentes.length,2);
+  } finally { globalThis.fetch=packageFetch; }
   const pkgTurn = { idTurno: randomUUID(), mensaje: 'Quiero revisar el paquete de estadística.' };
   const pkgBegin = await call('/internal/tesi/begin', 'POST', pkgTurn, 201, bridge);
   const pkgId = `paquete-${pkg.idServicio}`;
   const pkgResult = { state: { service: pkgId, packageVersion: pkg.version }, reply: 'Paquete disponible.', interpretacionR7: { campos: { servicio: { valor: pkgId, evidencias: [{ idMensaje: String(pkgBegin.evidencias.at(-1).idMensaje), fragmento: pkgTurn.mensaje }] } }, senales: {} } };
   const pkgSaved = await call('/internal/tesi/finish', 'POST', { ...pkgTurn, respuesta: pkgResult.reply, resultadoJson: JSON.stringify(pkgResult) }, 201, bridge);
   assert.equal(pkgSaved.resultado.calificacion.servicio, pkgId);
+  if (process.env.R7_INTEGRATION === '1') {
+    const priorVisitor = visitor, oldFetch = globalThis.fetch;
+    const envNames = ['CRM_API_URL', 'API_PROXY_TARGET', 'AI_PROVIDER', 'GEMINI_API_KEY', 'OPENAI_API_KEY'];
+    const oldEnv = Object.fromEntries(envNames.map(key => [key, process.env[key]]));
+    try {
+      visitor = '';
+      await call('/captacion/perfiles', 'POST', { ...capture, clave: randomUUID() }, 201);
+      process.env.CRM_API_URL = base; process.env.API_PROXY_TARGET = base;
+      process.env.AI_PROVIDER = 'gemini'; process.env.GEMINI_API_KEY = 'test-only'; delete process.env.OPENAI_API_KEY;
+      globalThis.fetch = async (url, init) => {
+        if (!String(url).startsWith('https://generativelanguage.googleapis.com/')) return oldFetch(url, init);
+        const request = JSON.parse(init.body), input = JSON.parse(request.contents[0].parts[0].text);
+        const isCommercial = !!request.generationConfig.responseJsonSchema.properties.campos;
+        const messageId = isCommercial ? input.mensajes.at(-1).idMensaje : null;
+        const evidence = (fragmento) => [{ idMensaje: messageId, fragmento }];
+        const result = isCommercial ? {
+          campos: [
+            { nombre:'necesidad', valor:'análisis estadístico', tipo:'declarado', evidencias:evidence('análisis estadístico') },
+            { nombre:'etapa', valor:'desarrollo', tipo:'declarado', evidencias:evidence('tesis en desarrollo') },
+            { nombre:'servicio', valor:pkgId, tipo:'inferido', evidencias:evidence('análisis estadístico') },
+          ], senales:[{nombre:'consulta_precio',valor:'true',tipo:'inferido',evidencias:evidence('precio')}], objeciones:[],
+        } : { kind:'business', name:null, university:null, degree:'maestría', thesisStage:'desarrollo', need:'análisis estadístico', deadline:null, service:pkgId, intent:'unchanged', human:false, objection:'none' };
+        return Response.json({ candidates:[{ finishReason:'STOP', content:{ parts:[{text:JSON.stringify(result)}] } }] });
+      };
+      const landing = fileURLToPath(new URL('../../tesispro-landing/', import.meta.url));
+      const requireLanding = createRequire(new URL('../../tesispro-landing/package.json', import.meta.url));
+      const { build } = createRequire(requireLanding.resolve('astro/package.json'))('esbuild');
+      const bundled = await build({ entryPoints:[`${landing}/src/pages/api/negotiation.ts`], bundle:true, platform:'node', format:'esm', write:false, define:{'import.meta.env':JSON.stringify({DEV:false})} });
+      const endpoint = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+      const initial = { stage:'START', name:'', university:'', degree:'', thesisStage:'', need:'', deadline:'', service:null, objections:[], discount:0, buyIntent:false, humanRequested:false };
+      const message = 'Necesito análisis estadístico para mi tesis en desarrollo de maestría y quiero saber el precio';
+      const request = new Request('http://localhost:4321/api/negotiation', {method:'POST',headers:{'Content-Type':'application/json',Origin:'http://localhost:4321',Cookie:visitor},body:JSON.stringify({idTurno:randomUUID(),message,history:[],state:initial})});
+      const response = await endpoint.POST({request});
+      const data = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(data));
+      assert.equal(data.calificacion.nivel, 'alto');
+      assert.equal(data.calificacion.campos.necesidad.valor, 'análisis estadístico');
+      assert.equal(data.calificacion.campos.necesidad.evidencias[0].fragmento, 'análisis estadístico');
+      assert.equal(data.calificacion.servicio, pkgId);
+      assert.equal((await call(`/admin/leads/${id}`)).calificaciones[0].resultado.nivel, 'alto');
+      const simulatedFetch = globalThis.fetch;
+      const retryTurn = randomUUID();
+      const retryRequest = () => new Request('http://localhost:4321/api/negotiation', {method:'POST',headers:{'Content-Type':'application/json',Origin:'http://localhost:4321',Cookie:visitor},body:JSON.stringify({idTurno:retryTurn,message,history:[],state:initial})});
+      globalThis.fetch = async (url, init) => String(url).startsWith('https://generativelanguage.googleapis.com/') ? Response.json({error:{message:'temporary'}},{status:503}) : oldFetch(url, init);
+      assert.equal((await endpoint.POST({request:retryRequest()})).status, 503);
+      const [failed] = await db.query('SELECT id_mensaje,respuesta FROM turno_tesi WHERE id_turno=$1', [retryTurn]);
+      assert(failed && failed.respuesta === null);
+      assert.equal((await db.query('SELECT count(*)::int n FROM calificacion_tesi WHERE id_turno=$1', [retryTurn]))[0].n, 0);
+      globalThis.fetch = simulatedFetch;
+      assert.equal((await endpoint.POST({request:retryRequest()})).status, 200);
+      assert.equal((await db.query('SELECT count(*)::int n FROM turno_tesi WHERE id_turno=$1', [retryTurn]))[0].n, 1);
+      console.log('OK R7: Tesi, proveedor simulado, puente y PostgreSQL con evidencia.');
+    } finally {
+      globalThis.fetch = oldFetch; visitor = priorVisitor;
+      for (const key of envNames) if (oldEnv[key] === undefined) delete process.env[key]; else process.env[key] = oldEnv[key];
+    }
+  }
+  const mismatchTurn = { idTurno: randomUUID(), mensaje: 'En realidad necesito acompañamiento integral.' };
+  const mismatchBegin = await call('/internal/tesi/begin', 'POST', mismatchTurn, 201, bridge);
+  const mismatchEvidence = [{ idMensaje: String(mismatchBegin.evidencias.at(-1).idMensaje), fragmento: 'acompañamiento integral' }];
+  const mismatchResult = { state: { service: pkgId, packageVersion: pkg.version }, reply: 'Paquete disponible.', interpretacionR7: { campos: { necesidad: { valor: 'acompañamiento integral', evidencias: mismatchEvidence }, servicio: { valor: pkgId, evidencias: mismatchEvidence } }, senales: {} } };
+  const mismatch = await call('/internal/tesi/finish', 'POST', { ...mismatchTurn, respuesta: mismatchResult.reply, resultadoJson: JSON.stringify(mismatchResult) }, 201, bridge);
+  assert.equal(mismatch.resultado.calificacion.servicio, null);
   await call(`/admin/paquetes/${pkg.idServicio}/estado`, 'PATCH', { estado: 'inactivo', version: pkg.version });
   const expiredTurn = { idTurno: randomUUID(), mensaje: '¿Sigue disponible el paquete de estadística?' };
   const expiredBegin = await call('/internal/tesi/begin', 'POST', expiredTurn, 201, bridge);
@@ -347,6 +493,20 @@ try {
     true,
   );
   visitor = '';
+  await call('/captacion/sesion', 'POST', {}, 201);
+  const objectionTurn = { idTurno: randomUUID(), mensaje: 'Me parece caro.' };
+  const objectionBegin = await call('/internal/tesi/begin', 'POST', objectionTurn, 201, bridge);
+  const objection = { state: {}, reply: 'Lo entiendo.', interpretacionR7: { campos: {}, senales: {}, objeciones: { precio: { valor: 'caro', tipo: 'declarado', evidencias: [{ idMensaje: String(objectionBegin.evidencias.at(-1).idMensaje), fragmento: 'caro' }] } } } };
+  const objectionSaved = await call('/internal/tesi/finish', 'POST', { ...objectionTurn, respuesta: objection.reply, resultadoJson: JSON.stringify(objection) }, 201, bridge);
+  assert.equal(objectionSaved.resultado.calificacion.nivel, 'bajo');
+  assert.equal(objectionSaved.resultado.calificacion.objeciones.precio.tipo, 'declarado');
+  const [anonymousConversation] = await db.query('SELECT id_conversacion FROM turno_tesi WHERE id_turno=$1', [objectionTurn.idTurno]);
+  const anonymousEvaluation = await call(`/admin/conversaciones/${anonymousConversation.id_conversacion}/calificacion`);
+  assert.equal(anonymousEvaluation.idLead, null);
+  assert.equal(anonymousEvaluation.resultado.objeciones.precio.valor, 'caro');
+  const unauthorizedEvaluation = await fetch(`${base}/admin/conversaciones/${anonymousConversation.id_conversacion}/calificacion`);
+  assert.equal(unauthorizedEvaluation.status, 401);
+  visitor = '';
   const contact = {
     clave: randomUUID(),
     fuente: 'consulta',
@@ -385,38 +545,16 @@ try {
     const { chromium } = createRequire(
       new URL('../../tesispro-landing/package.json', import.meta.url),
     )('@playwright/test');
-    const listener = createServer();
-    await new Promise((resolve) => listener.listen(0, '127.0.0.1', resolve));
-    const port = listener.address().port;
-    await new Promise((resolve) => listener.close(resolve));
-    const origin = `http://127.0.0.1:${port}`;
-    process.env.APP_ORIGIN = origin;
-    const nodeArgs = process.env.R7_UI === '1' ? ['--import', new URL('./r7-ai-mock.mjs', import.meta.url).href] : [];
-    frontend = spawn(process.execPath, [...nodeArgs, process.env.R6_UI_ENTRY || 'dist/server/entry.mjs'], {
-      cwd: landing,
-      windowsHide: true,
-      stdio: 'ignore',
-      env: {
-        ...process.env,
-        HOST: '127.0.0.1',
-        PORT: String(port),
-        API_PROXY_TARGET: base,
-        CRM_API_URL: base,
-        NODE_ENV: 'production',
-        ...(process.env.R7_UI === '1' ? { AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'test-only', GEMINI_MODEL: 'test-model', OPENAI_API_KEY: '' } : {}),
-      },
-    });
-    let ready = false;
-    for (let n = 0; n < 60; n++) {
-      try {
-        if ((await fetch(origin)).ok) {
-          ready = true;
-          break;
-        }
-      } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    process.env.CRM_API_URL=base;
+    process.env.API_PROXY_TARGET=base;
+    if(process.env.R7_UI==='1') {
+      process.env.AI_PROVIDER='gemini';process.env.GEMINI_API_KEY='test-only';process.env.GEMINI_MODEL='test-model';process.env.OPENAI_API_KEY='';
+      await import('./r7-ai-mock.mjs');
     }
-    assert(ready, 'No arrancó el servidor Astro compilado.');
+    uiProxy=await developmentUiProxy(base,process.env.TEST_UI_TARGET||'http://localhost:4321');
+    const origin=uiProxy.origin;
+    process.env.APP_ORIGIN=origin;
+    process.env.R8_AI_URL=origin+'/api/internal/proposal';
     browser = await chromium.launch({ channel: 'msedge', headless: true });
     const page = await browser.newPage();
     const errors = [];
@@ -448,6 +586,35 @@ try {
     await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
     await page.getByRole('button', { name: 'Ver Confirmado' }).click();
     await page.getByText('Investigadora', { exact: true }).waitFor();
+    if(process.env.R7_UI==='1') {
+      const commercial=await call('/admin/propuestas-comerciales/catalogo');
+      const selectedService=commercial.servicios.find(s=>s.idServicio===r8service.id_servicio);
+      await page.getByRole('checkbox',{name:new RegExp(selectedService.nombre)}).check();
+      const generating=page.waitForResponse(r=>r.url().endsWith(`/propuestas-comerciales/lead/${id}`)&&r.request().method()==='POST');
+      await page.getByRole('button',{name:'Generar borrador con IA',exact:true}).click();
+      const generated=await generating;
+      assert.equal(generated.status(),201,await generated.text());
+      const generatedBody=await generated.json();
+      assert.equal(generatedBody.contenido.total,selectedService.precio);
+      for(const [action,label] of [['revisar','Marcar revisada'],['presentar','Registrar presentación'],['aceptar','Registrar aceptación']]) {
+        const response=page.waitForResponse(r=>r.url().endsWith('/acciones')&&r.request().postDataJSON()?.accion===action);
+        await page.getByRole('button',{name:label,exact:true}).click();
+        const decided=await response;assert.equal(decided.status(),201,await decided.text());
+      }
+      await page.getByLabel('Fecha de firma',{exact:true}).fill('2026-11-01T10:00');
+      await page.getByLabel('Versión de cláusulas',{exact:true}).fill('1.0');
+      await page.getByRole('checkbox',{name:'Se confirmó la autoría del estudiante'}).check();
+      const contractCreated=page.waitForResponse(r=>r.url().endsWith('/api/admin/contratos')&&r.request().method()==='POST');
+      await page.getByRole('button',{name:'Registrar contrato',exact:true}).click();
+      const signed=await contractCreated;assert.equal(signed.status(),201,await signed.text());
+      const signedBody=await signed.json();assert.equal(signedBody.idPropuesta,generatedBody.idPropuesta);assert.equal(signedBody.montoTotal,selectedService.precio);
+      await page.getByRole('button',{name:'Cerrar',exact:true}).click();
+      await page.getByRole('button',{name:'Ver Confirmado',exact:true}).click();
+      await page.getByLabel('Abrir propuesta existente por ID').fill(generatedBody.idPropuesta);
+      await page.getByText(`Propuesta #${generatedBody.idPropuesta} · Aceptada · versión 1`,{exact:true}).waitFor();
+      assert.equal((await call(`/admin/propuestas-comerciales/${generatedBody.idPropuesta}`)).estado,'aceptada');
+      console.log('OK Navegador R8: borrador IA, importes del catálogo, revisión, presentación, aceptación, contrato y reapertura.');
+    }
     await page.goto(origin + '/evaluacion');
     const availableNext = await call(
       '/captacion/reuniones/disponibilidad?fecha=' + available.slice(0, 10),
@@ -574,11 +741,11 @@ try {
     );
   }
   console.log(
-    'OK R6: migraciones, perfil opcional, persistencia, revisiones, identidades concurrentes, conversion, Tesi, sugerencias, auditoria, permisos y reservas.',
+    'OK R6/R8: perfil, identidad, Tesi, evidencia, catálogo, precios, incompatibilidades, versiones, excepciones y contratación.',
   );
 } finally {
   if (browser) await browser.close();
-  if (frontend) frontend.kill();
+  if (uiProxy) await uiProxy.close();
   if (app) await app.close();
   if (db?.isInitialized) await db.destroy();
   if (control.isInitialized) {

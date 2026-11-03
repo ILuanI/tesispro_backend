@@ -82,7 +82,7 @@ export class JourneyFilterDto {
 }
 export class JourneyListDto extends JourneyFilterDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000000) page = 1;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 10;
   @IsOptional() @IsString() @Matches(/^[1-9]\d{0,17}$/) buyer?: string;
   @IsOptional() @IsString() @Matches(/^[1-9]\d{0,17}$/) lead?: string;
 }

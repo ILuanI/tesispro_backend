@@ -1,3 +1,4 @@
+import { currentMigrations } from './test-migrations.mjs';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
@@ -52,16 +53,7 @@ try {
     entities,
     extra: { options: `-c search_path=${schema}` },
     synchronize: false,
-    migrations: [
-      InitialSchema1791855075011,
-      AdminPanel1791900000000,
-      BuyerProfiles1792300000000,
-      BuyerAcademicCatalogs1792310000000,
-      ResourceLibrary1792200000000,
-      ResourceJourneys1792400000000,
-      LeadProfiling1792500000000,
-      TesiQualification1792600000000,
-    ],
+    migrations: currentMigrations,
   };
   db = new DataSource(options);
   await db.initialize();
@@ -429,7 +421,7 @@ try {
     await context.addCookies([
       { name: cookie.split('=')[0], value: cookie.split('=')[1], url: origin },
     ]);
-    const output = resolve('../tesispro_frontend/.artifacts/buyers');
+    const output = resolve('../tesispro-landing/.artifacts/buyers');
     await mkdir(output, { recursive: true });
     await check(
       'Navegador: alta, edición, consulta, filtros y persistencia',

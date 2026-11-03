@@ -1,14 +1,45 @@
 import type { Relation } from 'typeorm';
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { MetodoPago, EstadoPago } from '../common/enums/database.enums.js';
 import { Contrato } from './contrato.entity.js';
 import { Lead } from './lead.entity.js';
 
 @Entity('pago')
 export class Pago {
-  @Column({ name: 'id_cuota', type: 'integer', nullable: true }) idCuota: number | null;
-  @Column({ name: 'id_usuario_registro', type: 'integer', nullable: true }) idUsuarioRegistro: number | null;
-  @Column({ name: 'clave_idempotencia', type: 'uuid', nullable: true, unique: true }) claveIdempotencia: string | null;
+  @Column({ name: 'id_verificador', type: 'int', nullable: true })
+  idVerificador: number | null;
+  @Column({ name: 'verificado_en', type: 'timestamptz', nullable: true })
+  verificadoEn: Date | null;
+  @Column({ name: 'motivo_decision', type: 'text', nullable: true })
+  motivoDecision: string | null;
+  @Column({
+    name: 'clave_decision',
+    type: 'uuid',
+    nullable: true,
+    unique: true,
+  })
+  claveDecision: string | null;
+  @Column({ type: 'boolean', default: false }) historico: boolean;
+  @Column({ name: 'id_pago_origen', type: 'int', nullable: true })
+  idPagoOrigen: number | null;
+  @Column({ name: 'id_cuota', type: 'integer', nullable: true }) idCuota:
+    number | null;
+  @Column({ name: 'id_usuario_registro', type: 'integer', nullable: true })
+  idUsuarioRegistro: number | null;
+  @Column({
+    name: 'clave_idempotencia',
+    type: 'uuid',
+    nullable: true,
+    unique: true,
+  })
+  claveIdempotencia: string | null;
 
   @PrimaryGeneratedColumn({ name: 'id_pago' })
   idPago: number;
@@ -31,13 +62,28 @@ export class Pago {
   @Column({ type: 'char', length: 3, default: 'PEN' })
   moneda: string;
 
-  @Column({ type: 'enum', enum: MetodoPago, enumName: 'metodo_pago', nullable: true })
+  @Column({
+    type: 'enum',
+    enum: MetodoPago,
+    enumName: 'metodo_pago',
+    nullable: true,
+  })
   metodo: MetodoPago | null;
 
-  @Column({ type: 'enum', enum: EstadoPago, enumName: 'estado_pago', default: EstadoPago.PENDIENTE })
+  @Column({
+    type: 'enum',
+    enum: EstadoPago,
+    enumName: 'estado_pago',
+    default: EstadoPago.PENDIENTE,
+  })
   estado: EstadoPago;
 
-  @Column({ name: 'referencia_operacion', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'referencia_operacion',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   referenciaOperacion: string | null;
 
   @Column({ name: 'comprobante_url', type: 'text', nullable: true })

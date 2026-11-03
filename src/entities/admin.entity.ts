@@ -8,6 +8,9 @@ import {
 
 @Entity('cronograma_pago')
 export class CronogramaPago {
+  @Column({ name: 'revision', default: 0 }) revision: number;
+  @Column({ name: 'id_version_actual', type: 'int', nullable: true })
+  idVersionActual: number | null;
   @PrimaryGeneratedColumn({ name: 'id_cronograma' }) idCronograma: number;
   @Index({ unique: true }) @Column({ name: 'id_contrato' }) idContrato: number;
   @Column({
@@ -26,8 +29,13 @@ export class CronogramaPago {
 }
 
 @Entity('cuota_pago')
-@Index(['idCronograma', 'nroCuota'], { unique: true })
+@Index(['idVersion', 'nroCuota'], { unique: true })
 export class CuotaPago {
+  @Column({ name: 'id_version', type: 'int' }) idVersion: number;
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" }) entregables: {
+    texto: string;
+    origen: string;
+  }[];
   @PrimaryGeneratedColumn({ name: 'id_cuota' }) idCuota: number;
   @Column({ name: 'id_cronograma' }) idCronograma: number;
   @Column({ name: 'nro_cuota', type: 'smallint' }) nroCuota: number;

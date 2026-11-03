@@ -68,7 +68,7 @@ export class PackageStatusDto {
 }
 export class PackageListDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000000) page = 1;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 10;
   @IsOptional() @IsString() @MaxLength(150) q?: string;
   @IsOptional() @IsIn(['borrador', 'activo', 'inactivo']) estado?: string;
   @IsOptional() @Matches(/^(0|[1-9]\d{0,7})(\.\d{1,2})?$/) precioMin?: string;

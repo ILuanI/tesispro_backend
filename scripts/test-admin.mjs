@@ -1,3 +1,10 @@
+import { PaymentLegacyChecks1792910000000 } from '../dist/migrations/1792910000000-PaymentLegacyChecks.js';
+import { PaymentVerification1792900000000 } from '../dist/migrations/1792900000000-PaymentVerification.js';
+import { verifiedFixturePayment, historicalPaymentFixture } from './payment-test-helpers.mjs';
+import { PaymentActivationGuard1792810000000 } from '../dist/migrations/1792810000000-PaymentActivationGuard.js';
+import { CommercialProposals1792700000000 } from '../dist/migrations/1792700000000-CommercialProposals.js';
+import { scheduleFixtureBody, approveFixtureSchedule } from './payment-test-helpers.mjs';
+import { FlexiblePaymentSchedules1792800000000 } from '../dist/migrations/1792800000000-FlexiblePaymentSchedules.js';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
@@ -58,6 +65,11 @@ try {
       ResourceJourneys1792400000000,
       LeadProfiling1792500000000,
       TesiQualification1792600000000,
+      CommercialProposals1792700000000,
+      FlexiblePaymentSchedules1792800000000,
+      PaymentActivationGuard1792810000000,
+      PaymentVerification1792900000000,
+      PaymentLegacyChecks1792910000000,
     ],
     synchronize: false,
   };
@@ -100,8 +112,10 @@ try {
   const base = await app.getUrl();
   let cookie = '';
   async function http(path, method = 'GET', body, custom = {}) {
+    body=await scheduleFixtureBody(db,path,method,body);
     if(method==='PATCH' && /^\/admin\/leads\/\d+$/.test(path) && body && body.revision===undefined && cookie) { const current=await fetch(base+path,{headers:{Cookie:cookie}}); if(current.ok)body={...body,revision:(await current.json()).revision}; }
-    const res = await fetch(`${base}${path}`, {
+    const isFixturePayment=cookie && method==='POST' && /^\/admin\/cuotas\/\d+\/abonos$/.test(path);
+    const res = isFixturePayment ? await verifiedFixturePayment(db,base,path,body,{Origin:origin,Cookie:cookie,...custom}) : await fetch(`${base}${path}`, {
       method,
       headers: {
         Origin: origin,
@@ -111,6 +125,7 @@ try {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    await approveFixtureSchedule(base,cookie,origin,path,method,res);
     const text = await res.text();
     let data;
     try {
@@ -146,7 +161,7 @@ try {
       '/auth/login',
       'POST',
       { correo: 'ventas@example.test', password },
-      401,
+      200,
     );
   });
   await check('Login administrador y cookie HttpOnly', async () => {
@@ -371,6 +386,7 @@ try {
       await expect(`/admin/contratos/${id}/cronograma`, 'PATCH', {
         cuotas: cuotas.map((c, i) => ({
           ...c,
+          monto: i === 0 ? '23.33' : c.monto,
           fechaVencimiento: i === 0 ? '2026-01-30' : c.fechaVencimiento,
         })),
       });
@@ -381,7 +397,7 @@ try {
       `/admin/cuotas/${cuota.idCuota}/abonos`,
       'POST',
       { ...abono, monto: '24.00', claveIdempotencia: randomUUID() },
-      400,
+      409,
     );
     const results = await Promise.all(
       [1, 2].map(() =>
@@ -392,7 +408,7 @@ try {
         }),
       ),
     );
-    assert.deepEqual(results.map((r) => r.status).sort(), [201, 400]);
+    assert.deepEqual(results.map((r) => r.status).sort(), [201, 409]);
     await expect(
       `/admin/cuotas/${cuota.idCuota}/abonos`,
       'POST',
@@ -419,18 +435,18 @@ try {
   });
   await check('Cobros previos y pagos pendientes', async () => {
     const [p] = await db.query(
-      'INSERT INTO propuesta(id_lead,monto_total) VALUES($1,200) RETURNING id_propuesta',
+      "INSERT INTO propuesta(id_lead,monto_total,estado) VALUES($1,200,'aceptada') RETURNING id_propuesta",
       [lead.idLead],
     );
     const [c] = await db.query(
       'INSERT INTO contrato(id_lead,id_propuesta) VALUES($1,$2) RETURNING id_contrato',
       [lead.idLead, p.id_propuesta],
     );
-    await db.query(
+    await historicalPaymentFixture(db,
       "INSERT INTO pago(id_contrato,id_lead,monto,moneda,metodo,estado) VALUES($1,$2,50,'PEN','efectivo','confirmado')",
       [c.id_contrato, lead.idLead],
     );
-    const [pending] = await db.query(
+    const [pending] = await historicalPaymentFixture(db,
       "INSERT INTO pago(id_contrato,id_lead,monto,moneda,metodo,estado) VALUES($1,$2,20,'PEN','yape','pendiente') RETURNING id_pago",
       [c.id_contrato, lead.idLead],
     );
@@ -438,10 +454,13 @@ try {
       `/admin/contratos/${c.id_contrato}/cronograma/preview`,
       'POST',
       { cantidad: 2, primerVencimiento: '2026-11-01' },
-      400,
+      409,
     );
+    const [registrar]=await db.query("SELECT id_usuario FROM usuario_interno WHERE correo='r14-fixture-sales@example.test'");
+    await db.query("INSERT INTO pago_evento(id_pago,id_usuario,tipo,detalle) VALUES($1,$2,'regularizacion','{}')",[pending.id_pago,registrar.id_usuario]);
     await expect(`/admin/pagos-previos/${pending.id_pago}`, 'PATCH', {
       estado: 'rechazado',
+      motivo:'Revisi?n hist?rica independiente',claveIdempotencia:randomUUID(),
     });
     const r = (
       await expect(
@@ -486,7 +505,7 @@ try {
     // Comprueba esta migración concreta aunque se añadan otras después.
     const runner = db.createQueryRunner();
     try {
-      await new AdminPanel1791900000000().down(runner);
+      await assert.rejects(new AdminPanel1791900000000().down(runner));
     } finally {
       await runner.release();
     }
@@ -497,11 +516,11 @@ try {
           [schema],
         )
       )[0].n,
-      0,
+      1,
     );
     assert.equal(
       (await db.query('SELECT count(*)::int AS n FROM pago'))[0].n,
-      5,
+      7,
     );
   });
   console.log(`${passed} comprobaciones de integración completadas.`);

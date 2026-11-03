@@ -41,6 +41,7 @@ async function hiddenPassword() {
     stdin.on('data', handler);
   });
 }
+const role=process.argv.includes('--asesor')?'asesor_comercial':'administrador';
 try {
   const rl = createInterface({ input: stdin, output: stdout });
   const correo = (await rl.question('Correo del administrador: '))
@@ -68,7 +69,7 @@ try {
       [correo],
     );
     if (existing) {
-      if (existing.rol !== 'administrador' || existing.password_hash)
+      if (existing.rol !== role || existing.password_hash)
         throw new Error(
           'Este correo ya tiene acceso o corresponde a otro rol. No se modificó.',
         );
@@ -78,12 +79,12 @@ try {
       );
     } else
       await m.query(
-        "INSERT INTO usuario_interno(nombres,apellidos,correo,rol,password_hash) VALUES($1,$2,$3,'administrador',$4)",
-        [nombres, apellidos, correo, hash],
+        "INSERT INTO usuario_interno(nombres,apellidos,correo,rol,password_hash) VALUES($1,$2,$3,$5,$4)",
+        [nombres, apellidos, correo, hash, role],
       );
   });
   console.log(
-    'Administrador configurado. Ya puedes iniciar sesión en /admin/login.',
+    'Usuario configurado. Ya puedes iniciar sesión en /admin/login.',
   );
 } catch (error) {
   console.error(error.message || 'No se pudo configurar el administrador.');

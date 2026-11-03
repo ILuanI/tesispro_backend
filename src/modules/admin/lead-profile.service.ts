@@ -12,6 +12,7 @@ import {
   ProfilePageDto,
   SuggestionDecisionDto,
   HandoffUpdateDto,
+  QualificationReviewDto,
 } from './lead-profile.dto.js';
 
 export const camel = (r: Record<string, any>): Record<string, any> =>
@@ -58,6 +59,23 @@ export class LeadProfileService {
     const [row] = await this.db.query('SELECT q.resultado,q.fecha FROM calificacion_tesi q JOIN conversacion c USING(id_conversacion) WHERE c.id_lead=$1 AND c.id_conversacion=$2 ORDER BY q.id_calificacion DESC LIMIT 1', [lead, conversation]);
     if (!row) throw new NotFoundException('No existe una clasificación para esta conversación.');
     return row;
+  }
+  async qualificationByConversation(conversation: string) {
+    const [row] = await this.db.query('SELECT q.resultado,q.fecha,q.id_conversacion AS "idConversacion",q.id_lead AS "idLead",q.id_buyer AS "idBuyer" FROM calificacion_tesi q WHERE q.id_conversacion=$1 ORDER BY q.id_calificacion DESC LIMIT 1', [conversation]);
+    if (!row) throw new NotFoundException('No existe una clasificación para esta conversación.');
+    return row;
+  }
+  async reviewQualification(lead: string, evaluation: string, dto: QualificationReviewDto, user: number) {
+    return this.db.transaction(async m => {
+      await this.lock(m, lead, dto.revision);
+      const [row] = await m.query('SELECT resultado FROM calificacion_tesi WHERE id_calificacion=$1 AND id_lead=$2', [evaluation, lead]);
+      const item = row?.resultado?.[dto.grupo]?.[dto.campo];
+      if (!item) throw new NotFoundException('Dato de calificación no encontrado.');
+      const decision = { idCalificacion: evaluation, grupo: dto.grupo, campo: dto.campo, accion: dto.accion, valor: item.valor, evidencias: item.evidencias };
+      await this.audit(m, lead, user, 'revision_calificacion', null, decision);
+      await m.query('UPDATE lead SET revision=revision+1,updated_at=now() WHERE id_lead=$1', [lead]);
+      return { ok: true };
+    });
   }
   async handoff(lead: string, handoff: string, dto: HandoffUpdateDto, user: number) {
     return this.db.transaction(async m => {
@@ -385,7 +403,7 @@ export class LeadProfileService {
       const sugerencias = await query(
         'SELECT * FROM sugerencia_perfil WHERE id_lead=$1 ORDER BY fecha DESC',
       );
-      const calificaciones = await query('SELECT * FROM calificacion_tesi WHERE id_lead=$1 ORDER BY id_calificacion DESC');
+      const calificaciones = await query(`SELECT c.*,coalesce((SELECT json_agg(json_build_object('grupo',e.despues->>'grupo','campo',e.despues->>'campo','accion',e.despues->>'accion','fecha',e.fecha,'autor',concat_ws(' ',u.nombres,u.apellidos)) ORDER BY e.fecha DESC,e.id_evento DESC) FROM evento_perfil e LEFT JOIN usuario_interno u ON u.id_usuario=e.id_usuario WHERE e.id_lead=c.id_lead AND e.tipo='revision_calificacion' AND e.despues->>'idCalificacion'=c.id_calificacion::text),'[]') AS revisiones FROM calificacion_tesi c WHERE c.id_lead=$1 ORDER BY c.id_calificacion DESC`);
       const derivaciones = await query('SELECT * FROM derivacion_humana WHERE id_lead=$1 ORDER BY derivada_en DESC');
       const [last] = await m.query(
         `SELECT max(fecha) AS fecha FROM (${timelineSql}) t WHERE fecha<=now()`,

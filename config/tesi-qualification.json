@@ -6,5 +6,10 @@
     "bajo": []
   },
   "prioridad": ["intencion_contratacion", "alto", "medio", "bajo"],
-  "recomendacionRequiere": ["necesidad", "etapa"]
+  "recomendacionRequiere": ["necesidad", "etapa"],
+  "etapasReconocidas": ["tema", "proyecto", "desarrollo", "observacion", "sustentacion", "avance", "analisis"],
+  "correspondencias": [
+    { "necesidades": ["estadistic", "analisis", "revis", "observacion", "metodolog", "correccion"], "servicios": ["puntual", "etapas", "integral"] },
+    { "necesidades": ["etapa", "capitulo", "acompan", "integral", "proceso", "tesis"], "servicios": ["etapas", "integral"] }
+  ]
 }

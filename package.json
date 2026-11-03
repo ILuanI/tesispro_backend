@@ -7,6 +7,8 @@
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
+    "seed": "pnpm build && node scripts/seed.mjs",
+    "test:seed": "pnpm build && node scripts/test-seed.mjs",
     "test:packages": "pnpm build && node scripts/test-packages.mjs",
     "test:packages:browser": "pnpm build && node scripts/test-packages.mjs --browser",
     "test:referrals": "pnpm build && node scripts/test-referrals.mjs",
@@ -37,7 +39,10 @@
     "migration:run": "pnpm build && pnpm typeorm migration:run -d dist/database/typeorm.config.js",
     "migration:revert": "pnpm build && pnpm typeorm migration:revert -d dist/database/typeorm.config.js",
     "migration:show": "pnpm build && pnpm typeorm migration:show -d dist/database/typeorm.config.js",
-    "test:lead-profile": "pnpm build && node scripts/test-lead-profile.mjs"
+    "test:lead-profile": "pnpm build && node scripts/test-lead-profile.mjs",
+    "test:payment-schedules": "pnpm build && node scripts/test-payment-schedules.mjs",
+    "test:payment-verification": "pnpm build && node scripts/test-payment-verification.mjs",
+    "test:requirements": "pnpm build && node scripts/test-requirements.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

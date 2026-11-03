@@ -1,3 +1,6 @@
+import { PaymentVerificationService } from './payment-verification.service.js';
+import { PaymentSchedulesService } from './payment-schedules.service.js';
+import { SchedulePreviewDto } from './payment-schedules.dto.js';
 import { LeadProfileService } from './lead-profile.service.js';
 import {
   BadRequestException,
@@ -21,7 +24,11 @@ import {
   MetodoPago,
   ModalidadServicio,
 } from '../../common/enums/database.enums.js';
-import { makeKpi, makeRatioKpi, positiveSatisfactionDefinition } from './impulse-kpi.js';
+import {
+  makeKpi,
+  makeRatioKpi,
+  positiveSatisfactionDefinition,
+} from './impulse-kpi.js';
 import { ContractListDto } from './contracts.dto.js';
 import { profileJourneyFilter } from './journey-filters.js';
 
@@ -47,20 +54,27 @@ const addDays = (isoDate: string, days: number) => {
   return limaDate(date);
 };
 const number = (value: unknown) => Number(value ?? 0);
-const cuotaSql = `SELECT c.id_cuota,c.id_cronograma,c.nro_cuota,c.monto, c.fecha_vencimiento::text AS fecha_vencimiento, cp.id_contrato, cp.moneda,
+const cuotaSql = `SELECT c.id_cuota,c.id_cronograma,c.nro_cuota,c.monto, c.fecha_vencimiento::text AS fecha_vencimiento, cp.id_contrato, cp.moneda,c.id_version,
   ct.id_lead, l.nombres, l.apellidos, l.correo,
   COALESCE(a.abonado,0)::numeric(10,2)::text AS abonado,
   (c.monto-COALESCE(a.abonado,0))::numeric(10,2)::text AS saldo,
   CASE WHEN COALESCE(a.abonado,0)>=c.monto THEN 'pagada' WHEN COALESCE(a.abonado,0)>0 THEN 'parcial' ELSE 'pendiente' END AS estado,
-  (c.fecha_vencimiento < (now() AT TIME ZONE 'America/Lima')::date AND c.monto>COALESCE(a.abonado,0)) AS vencida
-  FROM cuota_pago c JOIN cronograma_pago cp USING(id_cronograma)
+  ((v.historico OR v.estado='en_ejecucion') AND c.fecha_vencimiento < (now() AT TIME ZONE 'America/Lima')::date AND c.monto>COALESCE(a.abonado,0)) AS vencida,
+  (c.fecha_vencimiento = (now() AT TIME ZONE 'America/Lima')::date AND c.monto>COALESCE(a.abonado,0)) AS vence_hoy,
+  v.estado AS estado_cronograma
+  FROM cuota_pago c JOIN cronograma_pago cp ON cp.id_cronograma=c.id_cronograma AND cp.id_version_actual=c.id_version
+  JOIN cronograma_version v ON v.id_version=c.id_version
   JOIN contrato ct ON ct.id_contrato=cp.id_contrato JOIN lead l ON l.id_lead=ct.id_lead
-  LEFT JOIN (SELECT id_cuota,sum(monto) AS abonado FROM pago WHERE estado='confirmado' GROUP BY id_cuota) a USING(id_cuota)`;
+  LEFT JOIN (SELECT id_cuota,sum(monto) AS abonado FROM pago_neto WHERE estado='confirmado' GROUP BY id_cuota) a USING(id_cuota)`;
+const cuotaHistorySql = cuotaSql.replace(
+  ' AND cp.id_version_actual=c.id_version',
+  '',
+);
 const contratoSql = `SELECT c.*, l.nombres, l.apellidos, l.correo, p.moneda,p.monto_total, cp.id_cronograma,
   EXISTS(SELECT 1 FROM pago WHERE id_contrato=c.id_contrato) AS tiene_pagos,
-  (SELECT COALESCE(sum(monto),0)::numeric(10,2)::text FROM pago WHERE id_contrato=c.id_contrato AND estado='confirmado') AS total_pagado,
-  (SELECT COALESCE(sum(monto),0)::numeric(10,2)::text FROM pago WHERE id_contrato=c.id_contrato AND estado='confirmado' AND id_cuota IS NULL) AS cobros_previos,
-  (p.monto_total-(SELECT COALESCE(sum(monto),0) FROM pago WHERE id_contrato=c.id_contrato AND estado='confirmado'))::numeric(10,2)::text AS saldo,
+  (SELECT COALESCE(sum(monto),0)::numeric(10,2)::text FROM pago_neto WHERE id_contrato=c.id_contrato AND estado='confirmado') AS total_pagado,
+  (SELECT COALESCE(sum(monto),0)::numeric(10,2)::text FROM pago_neto WHERE id_contrato=c.id_contrato AND estado='confirmado' AND id_cuota IS NULL) AS cobros_previos,
+  (p.monto_total-(SELECT COALESCE(sum(monto),0) FROM pago_neto WHERE id_contrato=c.id_contrato AND estado='confirmado'))::numeric(10,2)::text AS saldo,
   (SELECT count(*)::int FROM pago WHERE id_contrato=c.id_contrato AND estado='pendiente' AND id_cuota IS NULL) AS pagos_pendientes
   FROM contrato c JOIN lead l ON l.id_lead=c.id_lead JOIN propuesta p ON p.id_propuesta=c.id_propuesta
   LEFT JOIN cronograma_pago cp ON cp.id_contrato=c.id_contrato`;
@@ -79,7 +93,11 @@ class Filters {
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly db: DataSource, private readonly profiles: LeadProfileService) {}
+  constructor(
+    private readonly db: DataSource,
+    private readonly profiles: LeadProfileService,
+    private readonly schedules: PaymentSchedulesService,
+  ) {}
   private async paged(sql: string, f: Filters, dto: ListDto, order: string) {
     if (dto.desde && dto.hasta && dto.desde > dto.hasta)
       throw new BadRequestException('El rango de fechas es inválido.');
@@ -110,8 +128,8 @@ export class AdminService {
   }
   leads(dto: ListDto) {
     const f = new Filters();
-    const activity=profileJourneyFilter(dto,f.values,'x.id_lead','lead');
-    if(activity)f.clauses.push(activity);
+    const activity = profileJourneyFilter(dto, f.values, 'x.id_lead', 'lead');
+    if (activity) f.clauses.push(activity);
     if (dto.q)
       f.add(
         "(concat_ws(' ',nombres,apellidos) ILIKE ? OR correo ILIKE ? OR telefono ILIKE ?)",
@@ -126,9 +144,21 @@ export class AdminService {
       f.clauses.push('id_responsable IS NULL');
     else if (dto.responsable)
       f.add('id_responsable=?', Number(dto.responsable));
-    if(dto.idEtapa)f.add('EXISTS(SELECT 1 FROM proyecto_tesis p WHERE p.id_lead=x.id_lead AND p.id_etapa=?)',dto.idEtapa);
-    if(dto.idNecesidad)f.add('EXISTS(SELECT 1 FROM proyecto_tesis p JOIN proyecto_necesidad pn USING(id_proyecto) WHERE p.id_lead=x.id_lead AND pn.id_necesidad=?)',dto.idNecesidad);
-    if(dto.origen)f.add("(EXISTS(SELECT 1 FROM sesion_landing sl WHERE sl.id_sesion=x.id_sesion_origen AND coalesce(sl.utm_source,sl.canal_origen::text)=?) OR EXISTS(SELECT 1 FROM solicitud_recurso sr WHERE sr.id_lead=x.id_lead AND sr.canal=?) OR EXISTS(SELECT 1 FROM evento_perfil ep JOIN sesion_landing sl ON sl.id_sesion=ep.id_sesion WHERE ep.id_lead=x.id_lead AND coalesce(sl.utm_source,sl.canal_origen::text)=?))",dto.origen);
+    if (dto.idEtapa)
+      f.add(
+        'EXISTS(SELECT 1 FROM proyecto_tesis p WHERE p.id_lead=x.id_lead AND p.id_etapa=?)',
+        dto.idEtapa,
+      );
+    if (dto.idNecesidad)
+      f.add(
+        'EXISTS(SELECT 1 FROM proyecto_tesis p JOIN proyecto_necesidad pn USING(id_proyecto) WHERE p.id_lead=x.id_lead AND pn.id_necesidad=?)',
+        dto.idNecesidad,
+      );
+    if (dto.origen)
+      f.add(
+        '(EXISTS(SELECT 1 FROM sesion_landing sl WHERE sl.id_sesion=x.id_sesion_origen AND coalesce(sl.utm_source,sl.canal_origen::text)=?) OR EXISTS(SELECT 1 FROM solicitud_recurso sr WHERE sr.id_lead=x.id_lead AND sr.canal=?) OR EXISTS(SELECT 1 FROM evento_perfil ep JOIN sesion_landing sl ON sl.id_sesion=ep.id_sesion WHERE ep.id_lead=x.id_lead AND coalesce(sl.utm_source,sl.canal_origen::text)=?))',
+        dto.origen,
+      );
     if (dto.canal) f.add('canal_preferido=?', dto.canal);
     if (dto.desde)
       f.add(
@@ -170,7 +200,11 @@ export class AdminService {
       LEFT JOIN grado_academico g ON g.id_grado=pa.id_grado WHERE pa.id_lead=$1`,
       [id],
     );
-    return { ...camel(lead), perfilAcademico: perfil ? camel(perfil) : null, ...await this.profiles.enrich(id) };
+    return {
+      ...camel(lead),
+      perfilAcademico: perfil ? camel(perfil) : null,
+      ...(await this.profiles.enrich(id)),
+    };
   }
   async historial(id: string) {
     await this.lead(id);
@@ -190,7 +224,7 @@ export class AdminService {
     );
   }
   saveLead(dto: LeadDto, user: number, id?: string) {
-    return this.profiles.save(dto,user,id);
+    return this.profiles.save(dto, user, id);
   }
   contratos(dto: ContractListDto) {
     const f = new Filters();
@@ -200,9 +234,21 @@ export class AdminService {
         /^\d+$/.test(dto.q) ? dto.q : `%${dto.q}%`,
       );
     if (dto.moneda) f.add('moneda=?', dto.moneda);
-    if (dto.desde) f.add("(fecha_firma AT TIME ZONE 'America/Lima')::date>=?::date", dto.desde);
-    if (dto.hasta) f.add("(fecha_firma AT TIME ZONE 'America/Lima')::date<=?::date", dto.hasta);
-    if (dto.planificacion) f.add('(id_cronograma IS NOT NULL)=?::boolean', dto.planificacion === 'con');
+    if (dto.desde)
+      f.add(
+        "(fecha_firma AT TIME ZONE 'America/Lima')::date>=?::date",
+        dto.desde,
+      );
+    if (dto.hasta)
+      f.add(
+        "(fecha_firma AT TIME ZONE 'America/Lima')::date<=?::date",
+        dto.hasta,
+      );
+    if (dto.planificacion)
+      f.add(
+        '(id_cronograma IS NOT NULL)=?::boolean',
+        dto.planificacion === 'con',
+      );
     return this.paged(contratoSql, f, dto, 'id_contrato');
   }
   async contrato(id: number, m: EntityManager = this.db.manager, lock = false) {
@@ -236,124 +282,19 @@ export class AdminService {
       cronograma: cronograma ? camel(cronograma) : null,
       cuotas: map(cuotas),
       cobrosPrevios: map(previos),
+      perfilPagos: await this.schedules.detail(id),
     };
   }
-  private async programable(id: number, m: EntityManager, lock = false) {
-    const contract = await this.contrato(id, m, lock);
-    if (contract.id_cronograma)
-      throw new ConflictException('Este contrato ya tiene un cronograma.');
-    const [propuesta] = await m.query(
-      'SELECT id_lead FROM propuesta WHERE id_propuesta=$1',
-      [contract.id_propuesta],
-    );
-    if (propuesta.id_lead !== contract.id_lead)
-      throw new BadRequestException(
-        'La propuesta y el contrato deben pertenecer al mismo lead.',
-      );
-    const [bad] = await m.query(
-      'SELECT id_pago FROM pago WHERE id_contrato=$1 AND (id_lead<>$2 OR moneda<>$3) LIMIT 1',
-      [id, contract.id_lead, contract.moneda],
-    );
-    if (bad)
-      throw new BadRequestException(
-        'Hay pagos históricos con lead o moneda inconsistentes. Reconcílialos antes de programar.',
-      );
-    if (contract.pagos_pendientes)
-      throw new BadRequestException(
-        'Resuelve los pagos históricos pendientes antes de programar.',
-      );
-    if (Number(contract.saldo) <= 0)
-      throw new BadRequestException(
-        'Este contrato no tiene saldo para programar.',
-      );
-    return contract;
-  }
-  async preview(id: number, dto: PreviewDto) {
-    const c = await this.programable(id, this.db.manager);
-    return {
-      cuotas: monthlySchedule(c.saldo, dto.cantidad, dto.primerVencimiento),
-    };
+  async preview(id: number, dto: SchedulePreviewDto) {
+    return this.schedules.preview(id, dto);
   }
   async saveCronograma(
     id: number,
     dto: CronogramaDto,
     user: number,
-    edit = false,
+    _edit = false,
   ) {
-    return this.db.transaction(async (m) => {
-      const contract = edit
-        ? await this.contrato(id, m, true)
-        : await this.programable(id, m, true);
-      const ordered = [...dto.cuotas].sort((a, b) => a.nroCuota - b.nroCuota);
-      let sum = 0n;
-      ordered.forEach((c, i) => {
-        if (c.nroCuota !== i + 1 || cents(c.monto) <= 0n)
-          throw new BadRequestException(
-            'Las cuotas deben ser consecutivas y sus montos positivos.',
-          );
-        if (i && c.fechaVencimiento < ordered[i - 1].fechaVencimiento)
-          throw new BadRequestException(
-            'Los vencimientos deben estar en orden cronológico.',
-          );
-        sum += cents(c.monto);
-      });
-      let cronogramaId: number;
-      if (edit) {
-        const [schedule] = await m.query(
-          'SELECT * FROM cronograma_pago WHERE id_contrato=$1',
-          [id],
-        );
-        if (!schedule) throw new NotFoundException('Cronograma no encontrado.');
-        if (sum !== cents(schedule.monto_programado))
-          throw new BadRequestException(
-            'La suma debe conservar el total programado.',
-          );
-        const current = await m.query(
-          `SELECT c.*,EXISTS(SELECT 1 FROM pago p WHERE p.id_cuota=c.id_cuota) AS tiene_abonos
-          FROM cuota_pago c WHERE id_cronograma=$1 ORDER BY nro_cuota FOR UPDATE`,
-          [schedule.id_cronograma],
-        );
-        if (current.length !== ordered.length)
-          throw new BadRequestException(
-            'Conserva el número de cuotas del cronograma guardado.',
-          );
-        for (let i = 0; i < current.length; i++) {
-          if (
-            current[i].tiene_abonos &&
-            cents(current[i].monto) !== cents(ordered[i].monto)
-          )
-            throw new BadRequestException(
-              'Las cuotas con abonos solo permiten modificar su vencimiento.',
-            );
-          await m.query(
-            'UPDATE cuota_pago SET monto=$1,fecha_vencimiento=$2 WHERE id_cuota=$3',
-            [
-              ordered[i].monto,
-              ordered[i].fechaVencimiento,
-              current[i].id_cuota,
-            ],
-          );
-        }
-        cronogramaId = schedule.id_cronograma;
-      } else {
-        if (sum !== cents(contract.saldo))
-          throw new BadRequestException(
-            'La suma de cuotas debe coincidir con el saldo del contrato.',
-          );
-        const [schedule] = await m.query(
-          `INSERT INTO cronograma_pago(id_contrato,monto_programado,cobros_previos,moneda,id_usuario)
-          VALUES($1,$2,$3,$4,$5) RETURNING id_cronograma`,
-          [id, decimal(sum), contract.cobros_previos, contract.moneda, user],
-        );
-        cronogramaId = schedule.id_cronograma;
-        for (const c of ordered)
-          await m.query(
-            'INSERT INTO cuota_pago(id_cronograma,nro_cuota,monto,fecha_vencimiento) VALUES($1,$2,$3,$4)',
-            [cronogramaId, c.nroCuota, c.monto, c.fechaVencimiento],
-          );
-      }
-      return { idCronograma: cronogramaId };
-    });
+    return this.schedules.save(id, dto, user);
   }
   cuotas(dto: ListDto) {
     const f = new Filters();
@@ -370,6 +311,7 @@ export class AdminService {
     }
     if (dto.moneda) f.add('moneda=?', dto.moneda);
     if (dto.vencida) f.add('vencida=?', dto.vencida === 'true');
+    if (dto.venceHoy) f.add('vence_hoy=?', dto.venceHoy === 'true');
     if (dto.desde) f.add('fecha_vencimiento>=?', dto.desde);
     if (dto.hasta) f.add('fecha_vencimiento<=?', dto.hasta);
     const order = {
@@ -384,7 +326,7 @@ export class AdminService {
   }
   async abonos(id: number) {
     const [cuota] = await this.db.query(
-      `SELECT * FROM (${cuotaSql}) x WHERE id_cuota=$1`,
+      `SELECT * FROM (${cuotaHistorySql}) x WHERE id_cuota=$1`,
       [id],
     );
     if (!cuota) throw new NotFoundException('Cuota no encontrada.');
@@ -398,131 +340,6 @@ export class AdminService {
         ),
       ),
     };
-  }
-  async addAbono(id: number, dto: AbonoDto, user: number) {
-    const amount = cents(dto.monto);
-    if (amount <= 0n)
-      throw new BadRequestException('El abono debe ser positivo.');
-    if (
-      !dto.fechaPago.includes('T') ||
-      !/(Z|[+-]\d{2}:\d{2})$/.test(dto.fechaPago) ||
-      new Date(dto.fechaPago).getTime() > Date.now() + 60_000
-    )
-      throw new BadRequestException(
-        'Ingresa una fecha de pago con zona horaria que no esté en el futuro.',
-      );
-    return this.db.transaction(async (m) => {
-      const [ref] = await m.query(
-        'SELECT cp.id_contrato FROM cuota_pago c JOIN cronograma_pago cp USING(id_cronograma) WHERE id_cuota=$1',
-        [id],
-      );
-      if (!ref) throw new NotFoundException('Cuota no encontrada.');
-      await this.contrato(ref.id_contrato, m, true);
-      const [existing] = await m.query(
-        'SELECT * FROM pago WHERE clave_idempotencia=$1',
-        [dto.claveIdempotencia],
-      );
-      if (existing) {
-        if (
-          existing.id_cuota !== id ||
-          cents(existing.monto) !== amount ||
-          existing.metodo !== dto.metodo ||
-          new Date(existing.fecha_pago).getTime() !==
-            new Date(dto.fechaPago).getTime() ||
-          (existing.referencia_operacion || '') !==
-            (dto.referenciaOperacion || '') ||
-          (existing.comprobante_url || '') !== (dto.comprobanteUrl || '')
-        )
-          throw new ConflictException(
-            'La solicitud de abono ya se utilizó con otros datos.',
-          );
-        return camel(existing);
-      }
-      await m.query(
-        'SELECT id_cuota FROM cuota_pago WHERE id_cuota=$1 FOR UPDATE',
-        [id],
-      );
-      const [cuota] = await m.query(
-        `SELECT * FROM (${cuotaSql}) x WHERE id_cuota=$1`,
-        [id],
-      );
-      if (amount > cents(cuota.saldo))
-        throw new BadRequestException('El abono supera el saldo de la cuota.');
-      await this.context(
-        m,
-        user,
-        'Primer abono confirmado: conversión automática a cliente',
-      );
-      const [row] = await m.query(
-        `INSERT INTO pago(id_contrato,id_lead,nro_cuota,id_cuota,monto,moneda,metodo,estado,fecha_pago,
-        referencia_operacion,comprobante_url,id_usuario_registro,clave_idempotencia)
-        VALUES($1,$2,$3,$4,$5,$6,$7,'confirmado',$8,$9,$10,$11,$12) RETURNING *`,
-        [
-          cuota.id_contrato,
-          cuota.id_lead,
-          cuota.nro_cuota,
-          id,
-          dto.monto,
-          cuota.moneda,
-          dto.metodo,
-          dto.fechaPago,
-          dto.referenciaOperacion || null,
-          dto.comprobanteUrl || null,
-          user,
-          dto.claveIdempotencia,
-        ],
-      );
-      return camel(row);
-    });
-  }
-  async resolverPago(id: number, dto: ResolverPagoDto, user: number) {
-    return this.db.transaction(async (m) => {
-      const [ref] = await m.query(
-        'SELECT id_contrato FROM pago WHERE id_pago=$1',
-        [id],
-      );
-      if (!ref) throw new NotFoundException('Pago no encontrado.');
-      const contract = await this.contrato(ref.id_contrato, m, true);
-      if (contract.id_cronograma)
-        throw new ConflictException(
-          'Los cobros previos están bloqueados porque el contrato ya tiene cronograma.',
-        );
-      const [pago] = await m.query(
-        'SELECT * FROM pago WHERE id_pago=$1 FOR UPDATE',
-        [id],
-      );
-      if (pago.estado !== 'pendiente' || pago.id_cuota)
-        throw new ConflictException(
-          'Solo se pueden resolver cobros históricos pendientes.',
-        );
-      if (dto.estado === 'confirmado') {
-        if (
-          !dto.fechaPago ||
-          !dto.fechaPago.includes('T') ||
-          !/(Z|[+-]\d{2}:\d{2})$/.test(dto.fechaPago) ||
-          new Date(dto.fechaPago).getTime() > Date.now() + 60_000 ||
-          !pago.metodo
-        )
-          throw new BadRequestException(
-            'El pago debe tener método y fecha con zona horaria para confirmarlo.',
-          );
-        if (
-          pago.id_lead !== contract.id_lead ||
-          pago.moneda !== contract.moneda ||
-          cents(pago.monto) <= 0n ||
-          cents(pago.monto) > cents(contract.saldo)
-        )
-          throw new BadRequestException(
-            'El pago es inconsistente con el saldo del contrato.',
-          );
-      }
-      await this.context(m, user, 'Confirmación de cobro previo');
-      const [row] = await m.query(
-        'UPDATE pago SET estado=$1,fecha_pago=$2,id_usuario_registro=$3 WHERE id_pago=$4 RETURNING *',
-        [dto.estado, dto.fechaPago || null, user, id],
-      );
-      return camel(row);
-    });
   }
   private kpiRange(dto: KpiRangeDto) {
     const hasta = dto.hasta || limaDate();
@@ -589,7 +406,7 @@ export class AdminService {
       ),
       this.db.query(
         `SELECT count(DISTINCT p.id_lead)::int AS payers
-        FROM pago p
+        FROM pago_neto p
         WHERE p.estado='confirmado'
           AND COALESCE(p.fecha_pago,p.created_at) >= ($1::date::timestamp AT TIME ZONE 'America/Lima')
           AND COALESCE(p.fecha_pago,p.created_at) < (($2::date + 1)::timestamp AT TIME ZONE 'America/Lima')`,
@@ -606,7 +423,7 @@ export class AdminService {
       this.db.query(
         `WITH first_payment AS (
           SELECT ct.id_propuesta, min(COALESCE(p.fecha_pago,p.created_at)) AS paid_at
-          FROM pago p JOIN contrato ct ON ct.id_contrato=p.id_contrato
+          FROM pago_neto p JOIN contrato ct ON ct.id_contrato=p.id_contrato
           WHERE p.estado='confirmado'
           GROUP BY ct.id_propuesta
         )
@@ -706,21 +523,46 @@ export class AdminService {
 
     const leads = number(leadStats.leads);
     const kpis = [
-      makeRatioKpi('CTR', number(publication.clicks), number(publication.impressions)),
+      makeRatioKpi(
+        'CTR',
+        number(publication.clicks),
+        number(publication.impressions),
+      ),
       makeRatioKpi('TIL', number(landing.interactions), number(landing.visits)),
-      makeRatioKpi('TCL', number(landing.completed_forms), number(landing.form_visits)),
+      makeRatioKpi(
+        'TCL',
+        number(landing.completed_forms),
+        number(landing.form_visits),
+      ),
       makeRatioKpi('LPO', number(leadStats.target_leads), leads),
-      makeKpi('TPR', chat.avg_response_seconds === null ? null : number(chat.avg_response_seconds), number(chat.response_count), null),
+      makeKpi(
+        'TPR',
+        chat.avg_response_seconds === null
+          ? null
+          : number(chat.avg_response_seconds),
+        number(chat.response_count),
+        null,
+      ),
       makeRatioKpi('TSU', number(chat.positive_ratings), number(chat.ratings)),
       makeRatioKpi('TCP', number(payers.payers), leads),
-      makeRatioKpi('TAP', number(proposalStats.accepted), number(proposalStats.sent)),
-      makeKpi('TPC', conversion.avg_days === null ? null : number(conversion.avg_days), number(conversion.converted), null),
+      makeRatioKpi(
+        'TAP',
+        number(proposalStats.accepted),
+        number(proposalStats.sent),
+      ),
+      makeKpi(
+        'TPC',
+        conversion.avg_days === null ? null : number(conversion.avg_days),
+        number(conversion.converted),
+        null,
+      ),
     ];
 
     return {
       range,
       assumptions: {
-        payer: 'Lead con al menos un pago confirmado en pago.estado = confirmado.',
+        payer:
+          'Lead con al menos un pago confirmado en pago.estado = confirmado.',
         satisfaction: positiveSatisfactionDefinition,
       },
       funnel: {
@@ -734,7 +576,11 @@ export class AdminService {
           label: row.nombre,
           clicks: number(row.clicks),
           impressions: number(row.impressions),
-          value: makeRatioKpi('CTR', number(row.clicks), number(row.impressions)).value,
+          value: makeRatioKpi(
+            'CTR',
+            number(row.clicks),
+            number(row.impressions),
+          ).value,
         })),
         leadsByDay: map(leadDayRows),
         leadsByUniversity: map(universityRows),
@@ -756,7 +602,7 @@ export class AdminService {
       this.db
         .query(`SELECT moneda,sum(saldo::numeric)::numeric(10,2)::text AS pendiente,
         COALESCE(sum(saldo::numeric) FILTER(WHERE vencida),0)::numeric(10,2)::text AS vencido,
-        sum(abonado::numeric)::numeric(10,2)::text AS cobrado FROM (${cuotaSql}) x GROUP BY moneda ORDER BY moneda`),
+        (SELECT coalesce(sum(p.monto),0)::numeric(10,2)::text FROM pago_neto p WHERE p.estado='confirmado' AND p.moneda=x.moneda) AS cobrado FROM (${cuotaSql}) x GROUP BY moneda ORDER BY moneda`),
       this.db.query(
         `SELECT * FROM (${cuotaSql}) x WHERE saldo::numeric>0 ORDER BY fecha_vencimiento,id_cuota LIMIT 5`,
       ),
@@ -764,10 +610,15 @@ export class AdminService {
         'SELECT l.*,e.nombre AS estado_nombre FROM lead l JOIN estado_lead e USING(id_estado) ORDER BY fecha_registro DESC LIMIT 5',
       ),
     ]);
-    const origenes=await this.db.query("SELECT coalesce(nullif(s.utm_source,''),s.canal_origen::text,'administracion') AS origen,count(*)::int AS total FROM lead l LEFT JOIN sesion_landing s ON s.id_sesion=l.id_sesion_origen GROUP BY 1 ORDER BY total DESC");
-    const [seguimiento]=await this.db.query("SELECT count(DISTINCT id_lead) FILTER(WHERE fecha_programada<now())::int AS vencidos,count(DISTINCT id_lead) FILTER(WHERE fecha_programada>=now())::int AS proximos FROM seguimiento WHERE estado='programado'");
+    const origenes = await this.db.query(
+      "SELECT coalesce(nullif(s.utm_source,''),s.canal_origen::text,'administracion') AS origen,count(*)::int AS total FROM lead l LEFT JOIN sesion_landing s ON s.id_sesion=l.id_sesion_origen GROUP BY 1 ORDER BY total DESC",
+    );
+    const [seguimiento] = await this.db.query(
+      "SELECT count(DISTINCT id_lead) FILTER(WHERE fecha_programada<now())::int AS vencidos,count(DISTINCT id_lead) FILTER(WHERE fecha_programada>=now())::int AS proximos FROM seguimiento WHERE estado='programado'",
+    );
     return {
-      origenes, seguimiento,
+      origenes,
+      seguimiento,
       leads: leads[0],
       estados: map(estados),
       monedas: map(monedas),

@@ -23,7 +23,7 @@ export class ReferralStatusDto {
 }
 export class ReferralListDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000000) page = 1;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 10;
   @IsOptional() @IsString() @MaxLength(150) q?: string;
   @IsOptional() @IsIn(['activo', 'inactivo']) estado?: string;
   @IsOptional()

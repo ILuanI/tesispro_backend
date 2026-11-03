@@ -1,3 +1,4 @@
+import { currentMigrations } from './test-migrations.mjs';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
@@ -51,15 +52,7 @@ try {
     entities,
     extra: { options: `-c search_path=${schema}` },
     synchronize: false,
-    migrations: [
-      InitialSchema1791855075011,
-      AdminPanel1791900000000,
-      ResourceLibrary1792200000000,
-      BuyerProfiles1792300000000,
-      ResourceJourneys1792400000000,
-      LeadProfiling1792500000000,
-      TesiQualification1792600000000,
-    ],
+    migrations: currentMigrations,
   };
   db = new DataSource(options);
   await db.initialize();
@@ -469,12 +462,12 @@ try {
           .first()
           .click();
         await uiExpect(page.locator('article').first()).toBeVisible();
-        await mkdir(resolve('../tesispro_frontend/.artifacts/recursos'), {
+        await mkdir(resolve('../tesispro-landing/.artifacts/recursos'), {
           recursive: true,
         });
         await page.screenshot({
           path: resolve(
-            '../tesispro_frontend/.artifacts/recursos/escritorio.png',
+            '../tesispro-landing/.artifacts/recursos/escritorio.png',
           ),
           fullPage: true,
         });
@@ -509,7 +502,7 @@ try {
         page.getByRole('heading', { name: 'Recursos', exact: true }),
       ).toBeVisible();
       await page.screenshot({
-        path: resolve('../tesispro_frontend/.artifacts/recursos/movil.png'),
+        path: resolve('../tesispro-landing/.artifacts/recursos/movil.png'),
         fullPage: true,
       });
       assert.equal(

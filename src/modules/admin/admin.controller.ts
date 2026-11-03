@@ -1,3 +1,11 @@
+import { UseInterceptors, UploadedFile } from '@nestjs/common';
+import {
+  PaymentVerificationService,
+  type PaymentUpload,
+} from './payment-verification.service.js';
+import { paymentFile } from './payment-verification.controller.js';
+import { PaymentRoles } from './auth.js';
+import { PaymentDecisionDto } from './payment-verification.dto.js';
 import {
   Body,
   Controller,
@@ -12,6 +20,7 @@ import {
   ValidationPipe,
   BadRequestException,
 } from '@nestjs/common';
+import { SchedulePreviewDto } from './payment-schedules.dto.js';
 import { AdminService } from './admin.service.js';
 import {
   AbonoDto,
@@ -39,7 +48,10 @@ function leadId(id: string) {
   }),
 )
 export class AdminController {
-  constructor(private readonly service: AdminService) {}
+  constructor(
+    private readonly service: AdminService,
+    private readonly payments: PaymentVerificationService,
+  ) {}
   @Get('catalogos') catalogos() {
     return this.service.catalogos();
   }
@@ -78,7 +90,7 @@ export class AdminController {
   }
   @Post('contratos/:id/cronograma/preview') preview(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: PreviewDto,
+    @Body() dto: SchedulePreviewDto,
   ) {
     return this.service.preview(id, dto);
   }
@@ -102,18 +114,22 @@ export class AdminController {
   @Get('cuotas/:id/abonos') abonos(@Param('id', ParseIntPipe) id: number) {
     return this.service.abonos(id);
   }
-  @Post('cuotas/:id/abonos') addAbono(
+  @Post('cuotas/:id/abonos')
+  @PaymentRoles('asesor_comercial')
+  @UseInterceptors(paymentFile())
+  addAbono(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AbonoDto,
+    @UploadedFile() file: PaymentUpload | undefined,
     @Req() req: AdminRequest,
   ) {
-    return this.service.addAbono(id, dto, req.admin.idUsuario);
+    return this.payments.register(id, dto, req.admin.idUsuario, file);
   }
   @Patch('pagos-previos/:id') resolverPago(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: ResolverPagoDto,
+    @Body() dto: PaymentDecisionDto,
     @Req() req: AdminRequest,
   ) {
-    return this.service.resolverPago(id, dto, req.admin.idUsuario);
+    return this.payments.decide(id, dto, req.admin.idUsuario);
   }
 }

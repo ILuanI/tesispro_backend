@@ -491,8 +491,13 @@ export class CaptureProfileService {
             result.quickReplies = [];
           }
         }
-        if (qualification.campos.necesidad?.tipo === 'inferido' && !result.state.humanRequested && typeof qualification.campos.necesidad.valor === 'string' && qualification.campos.necesidad.valor.length <= 90) {
-          result.quickReplies = [...(Array.isArray(result.quickReplies) ? result.quickReplies : []).slice(0, 3), `Confirmo: ${qualification.campos.necesidad.valor}`];
+        if (!result.state.humanRequested) {
+          const confirmations = ['necesidad', 'etapa', 'urgencia', 'servicio', 'nombre', 'universidad', 'grado'].flatMap(key => {
+            const item = qualification.campos[key];
+            const label = item && item.tipo !== 'confirmado' && typeof item.valor === 'string' ? `Confirmo ${key}: ${item.valor}` : '';
+            return label && label.length <= 100 ? [label] : [];
+          }).slice(0, 6);
+          result.quickReplies = [...(Array.isArray(result.quickReplies) ? result.quickReplies : []).slice(0, Math.max(0, 6 - confirmations.length)), ...confirmations];
         }
       }
       await m.query(
@@ -511,7 +516,7 @@ export class CaptureProfileService {
         'buyIntent',
       ]) {
         const value = result.state[field];
-        const fieldMap: Record<string, string> = { need: 'necesidad', thesisStage: 'etapa', deadline: 'urgencia', service: 'servicio' };
+        const fieldMap: Record<string, string> = { need: 'necesidad', thesisStage: 'etapa', deadline: 'urgencia', service: 'servicio', name: 'nombre', university: 'universidad', degree: 'grado' };
         const evidenceItem = interpretation?.campos?.[fieldMap[field]];
         if (interpretation && (!evidenceItem || JSON.stringify(evidenceItem.valor) !== JSON.stringify(value))) continue;
         if (

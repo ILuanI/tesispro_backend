@@ -74,7 +74,7 @@ export class BuyerDto {
 }
 export class BuyerListDto extends JourneyFilterDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000000) page = 1;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 20;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 10;
   @IsOptional() @IsString() @MaxLength(150) q?: string;
   @IsOptional() @IsIn(buyerChannels) canal?: string;
   @IsOptional() @IsIn(buyerReasons) motivoCaptacion?: string;

@@ -115,7 +115,39 @@ La sesión `tesispro_contact` dura 30 días y agrupa interacciones del navegador
 
 Las reglas están en `config/tesi-qualification.json`. El servidor valida el archivo al arrancar y calcula una huella SHA-256 del contenido normalizado. Al cambiarlo hay que reiniciar el backend; las evaluaciones anteriores conservan su versión. `R7_RULES_FILE` permite seleccionar otra ruta. Una configuración inválida impide nuevas evaluaciones y deja disponible la administración.
 
-Cada evaluación conserva los campos y señales interpretados con fragmentos literales y referencias a mensajes del visitante. Son inferencias y no reemplazan el interés manual ni los campos confirmados. La coincidencia literal no garantiza que la interpretación sea correcta. Las solicitudes de asesor crean una derivación pendiente; abrir WhatsApp no acredita que se haya enviado un mensaje ni que se haya atendido la solicitud.
+Cada evaluación conserva campos, señales y objeciones con fragmentos literales y referencias a mensajes del visitante. Un valor es declarado solo si aparece literalmente en la cita; una interpretación se identifica como inferida. El visitante puede confirmar expresamente necesidad, etapa, urgencia, servicio, nombre, universidad o grado mediante las opciones de Tesi. Los administradores pueden aceptar o rechazar cada interpretación en la ficha: esa revisión queda auditada y no cambia el perfil confirmado ni el interés manual. La coincidencia literal no garantiza que la interpretación sea correcta. Las solicitudes de asesor crean una derivación pendiente; abrir WhatsApp no acredita que se haya enviado un mensaje ni que se haya atendido la solicitud.
 
-La consulta autenticada `GET /admin/leads/:id/conversaciones/:conversation/calificacion` devuelve la última evaluación versionada de la conversación del lead. Es un punto de integración preliminar; R8 todavía no tiene contrato implementado. Ejecutar las migraciones de TypeORM antes de iniciar esta versión y configurar el proxy y `CRM_BRIDGE_SECRET` como se explica en la sección de captación.
+Las correspondencias de necesidad, etapa y códigos de servicio viven en el mismo archivo de reglas. Una recomendación requiere una correspondencia y un servicio activo; para paquetes también se comprueban sus componentes, vigencia y versión. Una necesidad o etapa no reconocida no produce una recomendación automática. Las correspondencias iniciales requieren validación comercial antes de su uso operativo.
 
+La consulta autenticada `GET /admin/conversaciones/:conversation/calificacion` devuelve la última evaluación versionada por conversación, incluida una conversación aún anónima o vinculada a un buyer. También sigue disponible `GET /admin/leads/:id/conversaciones/:conversation/calificacion` para una conversación de un lead. Son puntos de integración preliminares; R8 todavía no tiene contrato implementado. Ejecutar las migraciones de TypeORM antes de iniciar esta versión y configurar el proxy y `CRM_BRIDGE_SECRET` como se explica en la sección de captación.
+
+Para pruebas, `node --test scripts/test-r7-rules.test.mjs` comprueba validación y versionado de reglas; `pnpm test:lead-profile` prueba evidencia, confirmación, revisiones, derivaciones y recomendaciones en un esquema PostgreSQL temporal. En PowerShell, `$env:R7_INTEGRATION='1'; node scripts/test-lead-profile.mjs` incluye el endpoint de Tesi y un proveedor simulado, con prueba de fallo y reintento. En la landing, `node tests/r7-dev-browser.mjs` verifica la ficha en el servidor de desarrollo en `localhost:4321` con respuestas simuladas. Una prueba real del proveedor requiere una clave configurada; no se envía ninguna conversación al proveedor sin ella.
+
+## Propuestas comerciales R8
+
+La migración `CommercialProposals1792700000000` añade configuración comercial y versiones inmutables de propuestas; no autoriza precios automáticamente. Desde la ficha del lead, en Propuestas, un administrador configura explícitamente el precio, moneda, condiciones y entregables de cada servicio, así como opcionales e incompatibilidades. El total se calcula sumando componentes individuales; el precio fijo de R11 sigue disponible para sus flujos anteriores. La configuración no inventa datos ni activa las tarifas iniciales de cero.
+
+La ficha permite solicitar una recomendación, generar el borrador, comparar versiones, aprobar excepciones, registrar revisión y presentación manual y guardar la decisión del cliente. Los descuentos superiores a lo configurado y las condiciones especiales requieren motivo y aprobación explícita de un administrador, incluso cuando sea el mismo autor. Una nueva versión exige una nueva revisión y aprobación. La aceptación habilita registrar un contrato firmado que conserva la propuesta aceptada. Ninguna acción envía mensajes al cliente.
+
+El backend llama a `R8_AI_URL` (por defecto `http://localhost:4321/api/internal/proposal`) autenticado con `CRM_BRIDGE_SECRET`; Astro utiliza su proveedor de IA configurado. La descripción generada se revisa antes de presentar. La IA no recibe los precios autorizados del catálogo ni calcula importes; el contexto del lead puede contener sus propias referencias a precios. `pnpm test:lead-profile` cubre versiones, cálculos, excepción y contratación en un esquema temporal; la landing incluye `tests/r8-proposal.test.mjs` y el recorrido de ficha con respuestas simuladas en `tests/r7-dev-browser.mjs`.
+
+
+
+## R13: cronogramas flexibles
+
+Consultar [R13-PAGOS.md](R13-PAGOS.md) para configurar modalidades, aprobar versiones, activar y renegociar cronogramas. Las cuotas y los abonos existentes conservan sus referencias.
+
+
+## R14: verificacion independiente de pagos
+
+Consultar [R14-PAGOS.md](R14-PAGOS.md). El asesor comercial registra pagos pendientes y el administrador los verifica. El registro ya no confirma automaticamente un abono.
+
+## Carga inicial del CRM
+
+Ejecutar `pnpm seed` desde el backend, con `.env` apuntando a la base de desarrollo y las migraciones aplicadas. Requiere un administrador activo. Crea 24 leads, 8 buyers, 4 recursos PDF descargables, 32 captaciones, 6 reuniones, 24 conversaciones con clasificación y evidencia, 18 propuestas, 10 contratos, 10 cronogramas y seguimientos. Incluye pagos pendientes, confirmados y rechazados, adjuntos privados y una renegociación que conserva los abonos originales.
+
+La carga se ejecuta en una sola transacción y registra su ejecución en `carga_inicial`. Repetir el comando conserva los datos y devuelve `ya_cargado`; no repone registros editados o eliminados posteriormente. Una coincidencia con los correos previstos antes de la primera carga detiene la operación sin modificar esos contactos.
+
+Si no existe un asesor comercial activo, crea a Lucía Romero sin contraseña de acceso. Los abonos se registran con ese rol y las decisiones con un administrador diferente, mediante los servicios de R13 y R14. Se configuran modalidades propias y los precios de los tres servicios iniciales solamente cuando todavía no tienen autorización comercial; las configuraciones existentes se conservan. No requiere un proveedor de IA ni envía comunicaciones. El panel habitual de desarrollo consulta estos registros directamente.
+
+`pnpm test:seed` comprueba la carga y su repetición en un esquema PostgreSQL temporal, verifica las fichas y los contratos, las identidades, la exactitud de los saldos y la separación entre registro y verificación de pagos. El esquema temporal se retira al finalizar.

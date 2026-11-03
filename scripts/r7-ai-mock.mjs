@@ -4,6 +4,7 @@ globalThis.fetch = async (url, options) => {
   if (!String(url).startsWith('https://generativelanguage.googleapis.com/')) return original(url, options);
   const request = JSON.parse(options.body);
   const input = JSON.parse(request.contents[0].parts[0].text);
+  if(request.generationConfig.responseJsonSchema.properties.ids) return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({ids:[input.componentes[0].idServicio],texto:'Asesoría académica personalizada según la necesidad identificada.'})}]}}]});
   const commercial = !!request.generationConfig.responseJsonSchema.properties.campos;
   const message = commercial ? input.mensajes.at(-1) : null;
   const result = commercial ? {
@@ -13,6 +14,7 @@ globalThis.fetch = async (url, options) => {
       { nombre: 'servicio', valor: 'puntual', evidencias: [{ idMensaje: message.idMensaje, fragmento: 'análisis estadístico' }] },
     ],
     senales: [{ nombre: 'consulta_precio', valor: 'true', evidencias: [{ idMensaje: message.idMensaje, fragmento: 'precio' }] }],
+    objeciones: [],
   } : { kind: 'business', name: null, university: null, degree: 'maestría', thesisStage: 'desarrollo', need: 'análisis estadístico', deadline: null, service: 'puntual', intent: 'unchanged', human: false, objection: 'none' };
   return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(result) }] } }] });
 };

@@ -65,6 +65,7 @@ export class ContractsService {
         [contract.id_propuesta],
       );
       const locked = await this.dependencies(id, m);
+      const [r8Proposal] = await m.query('SELECT 1 FROM r8_propuesta WHERE id_propuesta=$1', [contract.id_propuesta]);
       const legacyPackage = contract.paquete_snapshot
         ? this.packages.contractSnapshot(contract.paquete_snapshot)
         : null;
@@ -86,7 +87,7 @@ export class ContractsService {
         ...camel(contract),
         propuesta: { ...camel(terms), detalles: lines.map(camel) },
         paquete: legacyPackage || binding?.contenido || null,
-        editableFinanciero: !locked && !binding && !legacyPackage,
+        editableFinanciero: !locked && !binding && !legacyPackage && !r8Proposal,
         eliminable: !locked,
       };
     });
@@ -181,6 +182,13 @@ export class ContractsService {
         [dto.idLead],
       );
       if (!lead) throw new NotFoundException('Lead no encontrado.');
+      if (dto.idPropuestaR8) {
+        if (dto.paquete || dto.propuesta) throw new BadRequestException('Usa únicamente la versión aceptada.');
+        const [accepted] = await m.query("SELECT r.*,p.id_lead FROM r8_propuesta r JOIN propuesta p USING(id_propuesta) WHERE r.id_propuesta=$1 FOR UPDATE OF r", [dto.idPropuestaR8]);
+        if (!accepted || accepted.id_lead!==dto.idLead || accepted.estado!=='aceptada') throw new ConflictException('La propuesta debe estar aceptada y pertenecer al lead.');
+        const [contract] = await m.query('INSERT INTO contrato(id_lead,id_propuesta,fecha_firma,version_clausulas,acepta_autoria_estudiante,archivo_url) VALUES($1,$2,$3,$4,true,$5) RETURNING id_contrato',[dto.idLead,dto.idPropuestaR8,dto.fechaFirma,dto.versionClausulas.trim(),dto.archivoUrl || null]);
+        return contract.id_contrato as number;
+      }
       if (dto.paquete && dto.propuesta)
         throw new BadRequestException(
           'Al elegir un paquete envía solo su ID y versión, sin importes manuales.',
@@ -269,8 +277,9 @@ export class ContractsService {
         `SELECT 1 FROM propuesta_detalle d JOIN servicio s USING(id_servicio) WHERE d.id_propuesta=$1 AND to_jsonb(s) @> '{"es_paquete":true}'::jsonb LIMIT 1`,
         [contract.id_propuesta],
       );
+      const [r8] = await m.query('SELECT 1 FROM r8_propuesta WHERE id_propuesta=$1',[contract.id_propuesta]);
       if (
-        (locked || packageLine || contract.paquete_snapshot) &&
+        (locked || packageLine || contract.paquete_snapshot || r8) &&
         (dto.propuesta !== undefined ||
           dto.fechaFirma !== undefined ||
           dto.aceptaAutoriaEstudiante !== undefined)

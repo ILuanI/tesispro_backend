@@ -53,7 +53,7 @@ export class ContractPackageDto {
 }
 export class CreateContractDto {
   @IsString() @Matches(/^[1-9]\d{0,18}$/) idLead: string;
-  @ValidateIf((o) => !o.paquete || o.propuesta !== undefined)
+  @ValidateIf((o) => (!o.paquete && !o.idPropuestaR8) || o.propuesta !== undefined)
   @IsDefined()
   @IsObject()
   @ValidateNested()
@@ -64,6 +64,7 @@ export class CreateContractDto {
   @ValidateNested()
   @Type(() => ContractPackageDto)
   paquete?: ContractPackageDto;
+  @IsOptional() @IsString() @Matches(/^[1-9]\d{0,18}$/) idPropuestaR8?: string;
   @IsISO8601({ strict: true })
   @Matches(/(Z|[+-]\d{2}:\d{2})$/)
   fechaFirma: string;

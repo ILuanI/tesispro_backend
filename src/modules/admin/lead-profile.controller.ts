@@ -31,6 +31,7 @@ import {
   TesiBeginDto,
   TesiFinishDto,
   HandoffUpdateDto,
+  QualificationReviewDto,
 } from './lead-profile.dto.js';
 import { AvailabilityDto } from './journeys.dto.js';
 const validation = new ValidationPipe({
@@ -61,6 +62,9 @@ export class LeadProfileController {
   }
   @Patch(':id/derivaciones/:handoff') handoff(@Param('id') lead: string, @Param('handoff') handoff: string, @Body() dto: HandoffUpdateDto, @Req() req: AdminRequest) {
     return this.profiles.handoff(id(lead), id(handoff), dto, req.admin.idUsuario);
+  }
+  @Post(':id/calificaciones/:evaluation/revision') review(@Param('id') lead: string, @Param('evaluation') evaluation: string, @Body() dto: QualificationReviewDto, @Req() req: AdminRequest) {
+    return this.profiles.reviewQualification(id(lead), id(evaluation), dto, req.admin.idUsuario);
   }
   @Get('catalogos-perfil') catalogs() {
     return this.profiles.catalogos();
@@ -110,6 +114,13 @@ export class LeadProfileController {
       dto,
       req.admin.idUsuario,
     );
+  }
+}
+@Controller('admin/conversaciones')
+export class ConversationQualificationController {
+  constructor(private readonly profiles: LeadProfileService) {}
+  @Get(':conversation/calificacion') qualification(@Param('conversation') conversation: string) {
+    return this.profiles.qualificationByConversation(id(conversation));
   }
 }
 @Public()

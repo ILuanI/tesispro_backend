@@ -1,4 +1,12 @@
-﻿// R11: only fictional fixtures in a temporary PostgreSQL schema. No operational migrations.
+import { PaymentLegacyChecks1792910000000 } from '../dist/migrations/1792910000000-PaymentLegacyChecks.js';
+import { PaymentVerification1792900000000 } from '../dist/migrations/1792900000000-PaymentVerification.js';
+import { verifiedFixturePayment, historicalPaymentFixture } from './payment-test-helpers.mjs';
+import { PaymentActivationGuard1792810000000 } from '../dist/migrations/1792810000000-PaymentActivationGuard.js';
+import {
+  scheduleFixtureBody,
+  approveFixtureSchedule,
+} from './payment-test-helpers.mjs';
+import { FlexiblePaymentSchedules1792800000000 } from '../dist/migrations/1792800000000-FlexiblePaymentSchedules.js'; // R11: only fictional fixtures in a temporary PostgreSQL schema. No operational migrations.
 import 'reflect-metadata';
 import 'dotenv/config';
 import assert from 'node:assert/strict';
@@ -23,6 +31,7 @@ import { BuyerAcademicCatalogs1792310000000 } from '../dist/migrations/179231000
 import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-ResourceJourneys.js';
 import { Referrals1792500000000 } from '../dist/migrations/1792500000000-Referrals.js';
 import { ServicePackages1792600000000 } from '../dist/migrations/1792600000000-ServicePackages.js';
+import { CommercialProposals1792700000000 } from '../dist/migrations/1792700000000-CommercialProposals.js';
 import { ServicioModule } from '../dist/modules/proyectos/servicio/servicio.module.js';
 const schema = `r11_test_${randomBytes(8).toString('hex')}`;
 const existingMode = process.argv.includes('--existing');
@@ -68,6 +77,11 @@ try {
       BuyerAcademicCatalogs1792310000000,
       ResourceJourneys1792400000000,
       Referrals1792500000000,
+      CommercialProposals1792700000000,
+      FlexiblePaymentSchedules1792800000000,
+      PaymentActivationGuard1792810000000,
+      PaymentVerification1792900000000,
+      PaymentLegacyChecks1792910000000,
       ServicePackages1792600000000,
     ],
   };
@@ -119,7 +133,9 @@ try {
   process.env.APP_ORIGIN = origin;
   process.env.API_PROXY_TARGET = base;
   async function http(path, method = 'GET', body, headers = {}) {
-    return fetch(base + path, {
+    body = await scheduleFixtureBody(db, path, method, body);
+    const isFixturePayment=cookie && method==='POST' && /^\/admin\/cuotas\/\d+\/abonos$/.test(path);
+    const res = isFixturePayment ? await verifiedFixturePayment(db,base,path,body,{Origin:origin,Cookie:cookie,...headers}) : await fetch(base + path, {
       method,
       headers: {
         Origin: origin,
@@ -129,6 +145,8 @@ try {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    await approveFixtureSchedule(base, cookie, origin, path, method, res);
+    return res;
   }
   async function expect(
     path,
@@ -225,7 +243,7 @@ try {
       'Reconciliación conserva precios desde, permisos, prestaciones y snapshots anteriores',
       async () => {
         const [before] = await db.query(
-        "SELECT * FROM paquete WHERE codigo='heredado_desde'",
+          "SELECT * FROM paquete WHERE codigo='heredado_desde'",
         );
         const [oldVersion] = await db.query(
           'SELECT datos FROM paquete_version WHERE id_paquete=$1 AND version=1',
@@ -317,7 +335,9 @@ try {
     },
   );
   await check(
-    existingMode?'Concurrencia optimista e historial sin sobrescritura':'Concurrencia optimista, historial y versiones inmutables',
+    existingMode
+      ? 'Concurrencia optimista e historial sin sobrescritura'
+      : 'Concurrencia optimista, historial y versiones inmutables',
     async () => {
       const changes = await Promise.all([
         http(`/admin/paquetes/${p.idServicio}`, 'PATCH', {
@@ -539,342 +559,360 @@ try {
       );
     },
   );
-  const { build } = createRequire(
-    requireFrontend.resolve('astro/package.json'),
-  )('esbuild');
-  async function load(path) {
-    const result = await build({
-      entryPoints: [resolve('../tesispro_frontend', path)],
-      bundle: true,
-      platform: 'node',
-      format: 'esm',
-      write: false,
-      define: { 'import.meta.env': JSON.stringify({ DEV: false }) },
-    });
-    return import(
-      'data:text/javascript;base64,' +
-        Buffer.from(result.outputFiles[0].text).toString('base64')
-    );
-  }
-  const endpoint = await load('src/pages/api/negotiation.ts'),
-    domain = await load('src/lib/negotiation.ts');
-  const tesi = async (message, state = domain.initialState()) => {
-    const response = await endpoint.POST({
-      request: new Request('http://localhost:4321/api/negotiation', {
-        method: 'POST',
-        headers: {
-          Origin: 'http://localhost:4321',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ message, history: [], state }),
-      }),
-    });
-    assert.equal(response.status, 200);
-    return response.json();
-  };
-  await check(
-    'Astro Tesi consume PostgreSQL: precio preciso, sin descuento y cambio de versión',
-    async () => {
-      let turn = await tesi(`Paquete ${p.codigo}`, {
-        ...domain.initialState(),
-        need: 'Revisión de tesis',
-        thesisStage: 'Desarrollo de tesis',
+  // R13 can run the financial regressions independently of the older R11 chat harness.
+  if (!process.argv.includes('--finance-only')) {
+    const { build } = createRequire(
+      requireFrontend.resolve('astro/package.json'),
+    )('esbuild');
+    async function load(path) {
+      const result = await build({
+        entryPoints: [resolve('../tesispro_frontend', path)],
+        bundle: true,
+        platform: 'node',
+        format: 'esm',
+        write: false,
+        define: { 'import.meta.env': JSON.stringify({ DEV: false }) },
       });
-      assert.equal(turn.proposal.min, 650.5);
-      assert.equal(turn.proposal.discount, 0);
-      assert.equal(turn.state.service, `paquete-${p.idServicio}`);
-      turn = await tesi('Quiero un descuento', { ...turn.state, discount: 10 });
-      assert.equal(turn.proposal.min, 650.5);
-      assert.equal(turn.proposal.discount, 0);
-      assert.ok(!turn.reply.includes('10%'));
-      const previous = turn.state;
-      p = await expect(`/admin/paquetes/${p.idServicio}`, 'PATCH', {
-        ...body(p),
-        precioFijo: '700.75',
+      return import(
+        'data:text/javascript;base64,' +
+          Buffer.from(result.outputFiles[0].text).toString('base64')
+      );
+    }
+    const endpoint = await load('src/pages/api/negotiation.ts'),
+      domain = await load('src/lib/negotiation.ts');
+    const tesi = async (message, state = domain.initialState()) => {
+      const response = await endpoint.POST({
+        request: new Request('http://localhost:4321/api/negotiation', {
+          method: 'POST',
+          headers: {
+            Origin: 'http://localhost:4321',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ message, history: [], state }),
+        }),
       });
-      turn = await tesi('Acepto', previous);
-      assert.equal(turn.readyForHandoff, false);
-      assert.equal(turn.proposal.min, 700.75);
-      assert.match(turn.reply, /cambiaron/);
-    },
-  );
-  await check(
-    'Vigencia, filtros e inactivos fuera de Tesi y contratación nueva',
-    async () => {
-      const future = await expect(
-        '/admin/paquetes',
-        'POST',
-        {
-          ...body(p),
-          version: undefined,
-          codigo: 'FUTURO_R11',
-          nombre: 'Futuro de prueba',
-          vigenciaDesde: '2099-01-01',
-        },
-        201,
-      );
-      assert.ok(
-        !(await expect('/public/paquetes')).some(
-          (x) => x.idServicio === future.idServicio,
-        ),
-      );
-      assert.equal(
-        (
-          await expect(
-            '/admin/paquetes?estado=activo&precioMin=600&precioMax=800',
-          )
-        ).total,
-        2,
-      );
-      assert.equal((await expect('/admin/paquetes?vigencia=futuro')).total, 1);
-      p = await expect(`/admin/paquetes/${p.idServicio}/estado`, 'PATCH', {
-        estado: 'inactivo',
-        version: p.version,
-      });
-      assert.deepEqual(await expect('/public/paquetes'), []);
-      const turn = await tesi('¿Qué precio tienen?', {
-        ...domain.initialState(),
-        service: `paquete-${p.idServicio}`,
-        packageVersion: p.version,
-        discount: 10,
-      });
-      assert.equal(turn.proposal, null);
-      assert.match(turn.reply, /No hay paquetes/);
-      assert.ok(!turn.reply.includes('S/'));
-      await expect('/admin/contratos', 'POST', contractPayload(p), 409);
-      assert.equal(
-        (await expect(`/admin/contratos/${first.idContrato}`)).montoTotal,
-        '500.25',
-      );
-    },
-  );
-  if (process.argv.includes('--browser')) {
-    const { chromium, expect: ui } = requireFrontend('@playwright/test');
-    const frontend = process.env.R11_FRONTEND_ORIGIN || 'http://localhost:4321';
-    server = createServer((req, res) => {
-      const api =
-        req.url.startsWith('/api/') &&
-        !req.url.startsWith('/api/negotiation') &&
-        !req.url.startsWith('/api/faq-ai');
-      const target = new URL(
-        api ? req.url.slice(4) : req.url,
-        api ? base : frontend,
-      );
-      const proxy = proxyRequest(
-        target,
-        { method: req.method, headers: { ...req.headers, host: target.host } },
-        (r) => {
-          res.writeHead(r.statusCode || 502, r.headers);
-          r.pipe(res);
-        },
-      );
-      proxy.on('error', () => {
-        res.writeHead(502);
-        res.end();
-      });
-      req.pipe(proxy);
-    });
-    await new Promise((done) => server.listen(0, '127.0.0.1', done));
-    origin = `http://127.0.0.1:${server.address().port}`;
-    process.env.APP_ORIGIN = origin;
-    browser = await chromium.launch({ channel: 'msedge', headless: true });
-    const ctx = await browser.newContext({
-      viewport: { width: 1440, height: 1000 },
-    });
-    const login = await http('/auth/login', 'POST', {
-      correo: 'r11@example.test',
-      password,
-    });
-    await ctx.addCookies([
-      {
-        name: 'tesispro_session',
-        value: login.headers.get('set-cookie').split(';')[0].split('=')[1],
-        url: origin,
-      },
-    ]);
-    const page = await ctx.newPage(),
-      errors = [],
-      consoleErrors = [];
-    page.on('pageerror', (e) => errors.push(e.message));
-    page.on('console', (m) => {
-      if (m.type() === 'error') consoleErrors.push(m.text());
-    });
-    const output = resolve('.artifacts/r11');
-    await mkdir(output, { recursive: true });
+      assert.equal(response.status, 200);
+      return response.json();
+    };
     await check(
-      'UI real: crear, servicios, entregables, restricciones, activar, editar e historial',
+      'Astro Tesi consume PostgreSQL: precio preciso, sin descuento y cambio de versión',
       async () => {
-        await page.goto(origin + '/admin/paquetes');
-        await ui(
-          page.getByRole('heading', { name: 'Paquetes', exact: true }),
-        ).toBeVisible();
-        await page
-          .getByRole('button', { name: 'Crear paquete', exact: true })
-          .click();
-        let dialog = page.getByRole('dialog');
-        await dialog.getByLabel('Código *', { exact: true }).fill('UI_R11');
-        await dialog
-          .getByLabel('Nombre *', { exact: true })
-          .fill('Paquete UI de prueba');
-        await dialog
-          .getByLabel('Descripción', { exact: true })
-          .fill('Descripción solo para pruebas aisladas');
-        await dialog
-          .getByRole('button', { name: 'Agregar servicio', exact: true })
-          .click();
-        await dialog
-          .getByLabel('Servicio 1', { exact: true })
-          .selectOption(String(service));
-        await dialog
-          .getByRole('button', { name: 'Agregar entregable', exact: true })
-          .click();
-        await dialog
-          .getByLabel('Entregable 1', { exact: true })
-          .fill('Entrega UI de prueba');
-        await dialog
-          .getByRole('button', { name: 'Agregar restricción', exact: true })
-          .click();
-        await dialog
-          .getByLabel('Restricción 1', { exact: true })
-          .fill('Restricción UI de prueba');
-        await dialog.getByLabel('Precio fijo', { exact: true }).fill('85.35');
-        await dialog
-          .getByRole('button', { name: 'Guardar paquete', exact: true })
-          .click();
-        await ui(dialog).toHaveCount(0);
-        await page
-          .getByRole('button', {
-            name: 'Activar Paquete UI de prueba',
-            exact: true,
-          })
-          .click();
-        await page
-          .getByRole('dialog')
-          .getByRole('button', { name: 'Confirmar estado' })
-          .click();
-        await ui(page.getByRole('dialog')).toHaveCount(0);
-        await page
-          .getByRole('button', {
-            name: 'Editar Paquete UI de prueba',
-            exact: true,
-          })
-          .click();
-        dialog = page.getByRole('dialog');
-        await dialog.getByLabel('Precio fijo', { exact: true }).fill('95.45');
-        await dialog
-          .getByRole('button', { name: 'Agregar entregable', exact: true })
-          .click();
-        await dialog
-          .getByLabel('Entregable 2', { exact: true })
-          .fill('Segunda entrega de prueba');
-        await page.screenshot({
-          path: resolve(output, 'formulario.png'),
-          fullPage: true,
+        let turn = await tesi(`Paquete ${p.codigo}`, {
+          ...domain.initialState(),
+          need: 'Revisión de tesis',
+          thesisStage: 'Desarrollo de tesis',
         });
-        await dialog
-          .getByRole('button', { name: 'Guardar paquete', exact: true })
-          .click();
-        await ui(dialog).toHaveCount(0);
-        await page
-          .getByRole('button', {
-            name: 'Historial Paquete UI de prueba',
-            exact: true,
-          })
-          .click();
-        await page.getByRole('dialog').locator('summary').first().click();
-        await ui(
-          page
-            .getByRole('dialog')
-            .getByText('Precio fijo', { exact: true })
-            .first(),
-        ).toBeVisible();
-        await page.screenshot({
-          path: resolve(output, 'historial.png'),
-          fullPage: true,
+        assert.equal(turn.proposal.min, 650.5);
+        assert.equal(turn.proposal.discount, 0);
+        assert.equal(turn.state.service, `paquete-${p.idServicio}`);
+        turn = await tesi('Quiero un descuento', {
+          ...turn.state,
+          discount: 10,
         });
-        await page.keyboard.press('Escape');
-        await page
-          .getByLabel('Nombre o código', { exact: true })
-          .fill('UI_R11');
-        await ui(
-          page
-            .getByRole('table')
-            .getByText('Futuro de prueba', { exact: true }),
-        ).toHaveCount(0);
-        await page.screenshot({
-          path: resolve(output, 'paquetes-escritorio.png'),
-          fullPage: true,
+        assert.equal(turn.proposal.min, 650.5);
+        assert.equal(turn.proposal.discount, 0);
+        assert.ok(!turn.reply.includes('10%'));
+        const previous = turn.state;
+        p = await expect(`/admin/paquetes/${p.idServicio}`, 'PATCH', {
+          ...body(p),
+          precioFijo: '700.75',
         });
-        await page.setViewportSize({ width: 768, height: 1024 });
-        assert.ok(
-          await page.evaluate(
-            () => document.documentElement.scrollWidth <= innerWidth,
-          ),
-        );
-        await page.screenshot({
-          path: resolve(output, 'paquetes-tablet.png'),
-          fullPage: true,
-        });
-        await page.setViewportSize({ width: 390, height: 844 });
-        assert.ok(
-          await page.evaluate(
-            () => document.documentElement.scrollWidth <= innerWidth,
-          ),
-        );
-        await page.screenshot({
-          path: resolve(output, 'paquetes-movil.png'),
-          fullPage: true,
-        });
-        await page.setViewportSize({ width: 1440, height: 1000 });
-        await page.goto(origin + '/admin/contratos');
-        await page
-          .getByRole('button', { name: 'Nuevo contrato', exact: true })
-          .click();
-        dialog = page.getByRole('dialog');
-        await dialog
-          .getByRole('button', { name: /Lead R11.*lead-r11@example.test/ })
-          .click();
-        const [uiPackage] = await db.query(
-          "SELECT id_servicio FROM servicio WHERE codigo='UI_R11'",
-        );
-        await dialog
-          .getByLabel('Paquete autorizado (opcional)', { exact: true })
-          .selectOption(String(uiPackage.id_servicio));
-        await dialog.getByRole('checkbox').check();
-        await dialog
-          .getByRole('button', { name: 'Guardar contrato', exact: true })
-          .click();
-        await ui(
-          page
-            .getByRole('dialog')
-            .getByRole('heading', { name: 'Contrato registrado', exact: true }),
-        ).toBeVisible();
-        await ui(page.getByRole('dialog').getByText(/95[.,]45/)).toBeVisible();
-        await page.screenshot({
-          path: resolve(output, 'contrato-paquete.png'),
-          fullPage: true,
-        });
-        await page.goto(origin + '/admin/paquetes');
-        await page
-          .getByRole('button', {
-            name: 'Desactivar Paquete UI de prueba',
-            exact: true,
-          })
-          .click();
-        await page
-          .getByRole('dialog')
-          .getByRole('button', { name: 'Confirmar estado' })
-          .click();
-        await ui(page.getByRole('dialog')).toHaveCount(0);
-        assert.deepEqual(errors, []);
-        await writeFile(
-          resolve(output, 'consola.json'),
-          JSON.stringify({ errors, consoleErrors }, null, 2),
-        );
-        assert.deepEqual(consoleErrors, []);
+        turn = await tesi('Acepto', previous);
+        assert.equal(turn.readyForHandoff, false);
+        assert.equal(turn.proposal.min, 700.75);
+        assert.match(turn.reply, /cambiaron/);
       },
     );
-    await ctx.close();
+    await check(
+      'Vigencia, filtros e inactivos fuera de Tesi y contratación nueva',
+      async () => {
+        const future = await expect(
+          '/admin/paquetes',
+          'POST',
+          {
+            ...body(p),
+            version: undefined,
+            codigo: 'FUTURO_R11',
+            nombre: 'Futuro de prueba',
+            vigenciaDesde: '2099-01-01',
+          },
+          201,
+        );
+        assert.ok(
+          !(await expect('/public/paquetes')).some(
+            (x) => x.idServicio === future.idServicio,
+          ),
+        );
+        assert.equal(
+          (
+            await expect(
+              '/admin/paquetes?estado=activo&precioMin=600&precioMax=800',
+            )
+          ).total,
+          2,
+        );
+        assert.equal(
+          (await expect('/admin/paquetes?vigencia=futuro')).total,
+          1,
+        );
+        p = await expect(`/admin/paquetes/${p.idServicio}/estado`, 'PATCH', {
+          estado: 'inactivo',
+          version: p.version,
+        });
+        assert.deepEqual(await expect('/public/paquetes'), []);
+        const turn = await tesi('¿Qué precio tienen?', {
+          ...domain.initialState(),
+          service: `paquete-${p.idServicio}`,
+          packageVersion: p.version,
+          discount: 10,
+        });
+        assert.equal(turn.proposal, null);
+        assert.match(turn.reply, /No hay paquetes/);
+        assert.ok(!turn.reply.includes('S/'));
+        await expect('/admin/contratos', 'POST', contractPayload(p), 409);
+        assert.equal(
+          (await expect(`/admin/contratos/${first.idContrato}`)).montoTotal,
+          '500.25',
+        );
+      },
+    );
+    if (process.argv.includes('--browser')) {
+      const { chromium, expect: ui } = requireFrontend('@playwright/test');
+      const frontend =
+        process.env.R11_FRONTEND_ORIGIN || 'http://localhost:4321';
+      server = createServer((req, res) => {
+        const api =
+          req.url.startsWith('/api/') &&
+          !req.url.startsWith('/api/negotiation') &&
+          !req.url.startsWith('/api/faq-ai');
+        const target = new URL(
+          api ? req.url.slice(4) : req.url,
+          api ? base : frontend,
+        );
+        const proxy = proxyRequest(
+          target,
+          {
+            method: req.method,
+            headers: { ...req.headers, host: target.host },
+          },
+          (r) => {
+            res.writeHead(r.statusCode || 502, r.headers);
+            r.pipe(res);
+          },
+        );
+        proxy.on('error', () => {
+          res.writeHead(502);
+          res.end();
+        });
+        req.pipe(proxy);
+      });
+      await new Promise((done) => server.listen(0, '127.0.0.1', done));
+      origin = `http://127.0.0.1:${server.address().port}`;
+      process.env.APP_ORIGIN = origin;
+      browser = await chromium.launch({ channel: 'msedge', headless: true });
+      const ctx = await browser.newContext({
+        viewport: { width: 1440, height: 1000 },
+      });
+      const login = await http('/auth/login', 'POST', {
+        correo: 'r11@example.test',
+        password,
+      });
+      await ctx.addCookies([
+        {
+          name: 'tesispro_session',
+          value: login.headers.get('set-cookie').split(';')[0].split('=')[1],
+          url: origin,
+        },
+      ]);
+      const page = await ctx.newPage(),
+        errors = [],
+        consoleErrors = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      page.on('console', (m) => {
+        if (m.type() === 'error') consoleErrors.push(m.text());
+      });
+      const output = resolve('.artifacts/r11');
+      await mkdir(output, { recursive: true });
+      await check(
+        'UI real: crear, servicios, entregables, restricciones, activar, editar e historial',
+        async () => {
+          await page.goto(origin + '/admin/paquetes');
+          await ui(
+            page.getByRole('heading', { name: 'Paquetes', exact: true }),
+          ).toBeVisible();
+          await page
+            .getByRole('button', { name: 'Crear paquete', exact: true })
+            .click();
+          let dialog = page.getByRole('dialog');
+          await dialog.getByLabel('Código *', { exact: true }).fill('UI_R11');
+          await dialog
+            .getByLabel('Nombre *', { exact: true })
+            .fill('Paquete UI de prueba');
+          await dialog
+            .getByLabel('Descripción', { exact: true })
+            .fill('Descripción solo para pruebas aisladas');
+          await dialog
+            .getByRole('button', { name: 'Agregar servicio', exact: true })
+            .click();
+          await dialog
+            .getByLabel('Servicio 1', { exact: true })
+            .selectOption(String(service));
+          await dialog
+            .getByRole('button', { name: 'Agregar entregable', exact: true })
+            .click();
+          await dialog
+            .getByLabel('Entregable 1', { exact: true })
+            .fill('Entrega UI de prueba');
+          await dialog
+            .getByRole('button', { name: 'Agregar restricción', exact: true })
+            .click();
+          await dialog
+            .getByLabel('Restricción 1', { exact: true })
+            .fill('Restricción UI de prueba');
+          await dialog.getByLabel('Precio fijo', { exact: true }).fill('85.35');
+          await dialog
+            .getByRole('button', { name: 'Guardar paquete', exact: true })
+            .click();
+          await ui(dialog).toHaveCount(0);
+          await page
+            .getByRole('button', {
+              name: 'Activar Paquete UI de prueba',
+              exact: true,
+            })
+            .click();
+          await page
+            .getByRole('dialog')
+            .getByRole('button', { name: 'Confirmar estado' })
+            .click();
+          await ui(page.getByRole('dialog')).toHaveCount(0);
+          await page
+            .getByRole('button', {
+              name: 'Editar Paquete UI de prueba',
+              exact: true,
+            })
+            .click();
+          dialog = page.getByRole('dialog');
+          await dialog.getByLabel('Precio fijo', { exact: true }).fill('95.45');
+          await dialog
+            .getByRole('button', { name: 'Agregar entregable', exact: true })
+            .click();
+          await dialog
+            .getByLabel('Entregable 2', { exact: true })
+            .fill('Segunda entrega de prueba');
+          await page.screenshot({
+            path: resolve(output, 'formulario.png'),
+            fullPage: true,
+          });
+          await dialog
+            .getByRole('button', { name: 'Guardar paquete', exact: true })
+            .click();
+          await ui(dialog).toHaveCount(0);
+          await page
+            .getByRole('button', {
+              name: 'Historial Paquete UI de prueba',
+              exact: true,
+            })
+            .click();
+          await page.getByRole('dialog').locator('summary').first().click();
+          await ui(
+            page
+              .getByRole('dialog')
+              .getByText('Precio fijo', { exact: true })
+              .first(),
+          ).toBeVisible();
+          await page.screenshot({
+            path: resolve(output, 'historial.png'),
+            fullPage: true,
+          });
+          await page.keyboard.press('Escape');
+          await page
+            .getByLabel('Nombre o código', { exact: true })
+            .fill('UI_R11');
+          await ui(
+            page
+              .getByRole('table')
+              .getByText('Futuro de prueba', { exact: true }),
+          ).toHaveCount(0);
+          await page.screenshot({
+            path: resolve(output, 'paquetes-escritorio.png'),
+            fullPage: true,
+          });
+          await page.setViewportSize({ width: 768, height: 1024 });
+          assert.ok(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          );
+          await page.screenshot({
+            path: resolve(output, 'paquetes-tablet.png'),
+            fullPage: true,
+          });
+          await page.setViewportSize({ width: 390, height: 844 });
+          assert.ok(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          );
+          await page.screenshot({
+            path: resolve(output, 'paquetes-movil.png'),
+            fullPage: true,
+          });
+          await page.setViewportSize({ width: 1440, height: 1000 });
+          await page.goto(origin + '/admin/contratos');
+          await page
+            .getByRole('button', { name: 'Nuevo contrato', exact: true })
+            .click();
+          dialog = page.getByRole('dialog');
+          await dialog
+            .getByRole('button', { name: /Lead R11.*lead-r11@example.test/ })
+            .click();
+          const [uiPackage] = await db.query(
+            "SELECT id_servicio FROM servicio WHERE codigo='UI_R11'",
+          );
+          await dialog
+            .getByLabel('Paquete autorizado (opcional)', { exact: true })
+            .selectOption(String(uiPackage.id_servicio));
+          await dialog.getByRole('checkbox').check();
+          await dialog
+            .getByRole('button', { name: 'Guardar contrato', exact: true })
+            .click();
+          await ui(
+            page
+              .getByRole('dialog')
+              .getByRole('heading', {
+                name: 'Contrato registrado',
+                exact: true,
+              }),
+          ).toBeVisible();
+          await ui(
+            page.getByRole('dialog').getByText(/95[.,]45/),
+          ).toBeVisible();
+          await page.screenshot({
+            path: resolve(output, 'contrato-paquete.png'),
+            fullPage: true,
+          });
+          await page.goto(origin + '/admin/paquetes');
+          await page
+            .getByRole('button', {
+              name: 'Desactivar Paquete UI de prueba',
+              exact: true,
+            })
+            .click();
+          await page
+            .getByRole('dialog')
+            .getByRole('button', { name: 'Confirmar estado' })
+            .click();
+          await ui(page.getByRole('dialog')).toHaveCount(0);
+          assert.deepEqual(errors, []);
+          await writeFile(
+            resolve(output, 'consola.json'),
+            JSON.stringify({ errors, consoleErrors }, null, 2),
+          );
+          assert.deepEqual(consoleErrors, []);
+        },
+      );
+      await ctx.close();
+    }
   }
   console.log(
     `${passed} grupos R11 aprobados. Solo fixtures de prueba en esquema temporal.`,
