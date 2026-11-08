@@ -266,7 +266,7 @@ try {
       d = await detail(id);
       assert.equal(d.cuotas.length, 3);
       assert.equal(d.perfilPagos.versiones[0].estado, 'negociado');
-      assert.equal(d.cuotas[0].vencida, false);
+      assert.equal(d.cuotas[0].vencida, true);
       quota = d.cuotas[0].idCuota;
     },
   );

@@ -59,7 +59,7 @@ const cuotaSql = `SELECT c.id_cuota,c.id_cronograma,c.nro_cuota,c.monto, c.fecha
   COALESCE(a.abonado,0)::numeric(10,2)::text AS abonado,
   (c.monto-COALESCE(a.abonado,0))::numeric(10,2)::text AS saldo,
   CASE WHEN COALESCE(a.abonado,0)>=c.monto THEN 'pagada' WHEN COALESCE(a.abonado,0)>0 THEN 'parcial' ELSE 'pendiente' END AS estado,
-  ((v.historico OR v.estado='en_ejecucion') AND c.fecha_vencimiento < (now() AT TIME ZONE 'America/Lima')::date AND c.monto>COALESCE(a.abonado,0)) AS vencida,
+  ((v.historico OR v.estado IN ('negociado','en_ejecucion')) AND c.fecha_vencimiento < (now() AT TIME ZONE 'America/Lima')::date AND c.monto>COALESCE(a.abonado,0)) AS vencida,
   (c.fecha_vencimiento = (now() AT TIME ZONE 'America/Lima')::date AND c.monto>COALESCE(a.abonado,0)) AS vence_hoy,
   v.estado AS estado_cronograma
   FROM cuota_pago c JOIN cronograma_pago cp ON cp.id_cronograma=c.id_cronograma AND cp.id_version_actual=c.id_version

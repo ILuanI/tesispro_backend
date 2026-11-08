@@ -56,7 +56,7 @@ const paymentsSql = `SELECT p.*,u.nombres AS registrador,v.nombres AS verificado
   (NOT EXISTS(SELECT 1 FROM pago_comprobante WHERE id_pago=p.id_pago) AND coalesce(p.comprobante_url,'')='') AS evidencia_incompleta,
   EXISTS(SELECT 1 FROM pago p2 WHERE p2.id_pago<>p.id_pago AND p2.estado<>'rechazado' AND nullif(trim(p.referencia_operacion),'') IS NOT NULL AND lower(trim(p2.referencia_operacion))=lower(trim(p.referencia_operacion)) AND p2.metodo=p.metodo AND p2.moneda=p.moneda AND p2.monto=p.monto AND (p2.fecha_pago AT TIME ZONE 'America/Lima')::date=(p.fecha_pago AT TIME ZONE 'America/Lima')::date) AS posible_duplicado,
   (p.estado='pendiente' AND p.monto>coalesce(q.monto-(SELECT coalesce(sum(n.monto),0) FROM pago_neto n WHERE n.id_cuota=p.id_cuota AND n.estado='confirmado'),pr.monto_total-(SELECT coalesce(sum(n.monto),0) FROM pago_neto n WHERE n.id_contrato=p.id_contrato AND n.estado='confirmado'))) AS excedente,
-  c.id_lead AS titular, l.nombres,l.apellidos
+  c.id_lead AS titular, l.nombres,l.apellidos,l.correo,l.telefono
   FROM pago p JOIN contrato c ON c.id_contrato=p.id_contrato JOIN propuesta pr ON pr.id_propuesta=c.id_propuesta JOIN lead l ON l.id_lead=c.id_lead
   LEFT JOIN cuota_pago q ON q.id_cuota=p.id_cuota LEFT JOIN usuario_interno u ON u.id_usuario=p.id_usuario_registro LEFT JOIN usuario_interno v ON v.id_usuario=p.id_verificador`;
 
@@ -68,7 +68,7 @@ export class PaymentVerificationService {
       'SELECT rol FROM usuario_interno WHERE id_usuario=$1 AND activo=true',
       [user],
     );
-    if (u?.rol !== role)
+    if (u?.rol !== 'administrador' && u?.rol !== role)
       throw new ForbiddenException(
         role === 'asesor_comercial'
           ? 'El asesor comercial registra el movimiento.'
@@ -92,7 +92,7 @@ export class PaymentVerificationService {
   }
   async holders() {
     return this.db.query(
-      'SELECT DISTINCT l.id_lead AS "idLead",l.nombres,l.apellidos FROM contrato c JOIN lead l USING(id_lead) ORDER BY l.nombres,l.id_lead',
+      'SELECT DISTINCT l.id_lead AS "idLead",l.nombres,l.apellidos,l.correo,l.telefono FROM contrato c JOIN lead l USING(id_lead) ORDER BY l.nombres,l.id_lead',
     );
   }
   async contracts(lead: string) {
@@ -121,7 +121,7 @@ export class PaymentVerificationService {
     if (dto.q) {
       params.push('%' + dto.q + '%');
       filters.push(
-        `concat_ws(' ',nombres,apellidos,referencia_operacion,id_pago::text) ILIKE $${params.length}`,
+        `concat_ws(' ',nombres,apellidos,correo,telefono,referencia_operacion,id_pago::text,id_contrato::text) ILIKE $${params.length}`,
       );
     }
     if (dto.incidencias === 'true')
@@ -375,10 +375,6 @@ export class PaymentVerificationService {
         "SELECT id_usuario FROM pago_evento WHERE id_pago=$1 AND tipo='regularizacion' ORDER BY id_evento DESC LIMIT 1",
         [id],
       );
-      if (p.id_usuario_registro === user || reg?.id_usuario === user)
-        throw new ForbiddenException(
-          'No puedes verificar un movimiento que registraste.',
-        );
       if (p.estado !== 'pendiente') {
         if (
           p.clave_decision === dto.claveIdempotencia &&
@@ -534,10 +530,6 @@ export class PaymentVerificationService {
       'SELECT r.*,p.id_contrato,p.id_cuota,p.id_usuario_registro,q.id_version,cp.id_version_actual FROM pago_rectificacion r JOIN pago p USING(id_pago) LEFT JOIN cuota_pago q ON q.id_cuota=p.id_cuota LEFT JOIN cronograma_pago cp ON cp.id_contrato=p.id_contrato WHERE id_rectificacion=$1 FOR UPDATE OF r',
       [id],
     );
-    if (r.id_solicitante === user || r.id_usuario_registro === user)
-      throw new ForbiddenException(
-        'La rectificación requiere otro verificador.',
-      );
     if (r.estado !== 'pendiente') {
       if (
         r.estado === dto.estado &&
