@@ -18,6 +18,7 @@ import {
 } from './journeys.dto.js';
 import { journeyConditions } from './journey-filters.js';
 import { ReferralsService } from './referrals.service.js';
+import { completeBookingLeadProfile } from './booking-lead-profile.js';
 
 type Row = Record<string, any>;
 const camel = (r: Row) =>
@@ -464,13 +465,7 @@ export class JourneysService {
             ...(!lead.correo ? {correo:{origen:'reserva',confirmado:true}} : {}),
           })],
         );
-        const [academicBefore] = await m.query('SELECT id_universidad,universidad_otra FROM perfil_academico WHERE id_lead=$1', [s.id_lead]);
-        await m.query(
-          `INSERT INTO perfil_academico(id_lead,universidad_otra) VALUES($1,$2) ON CONFLICT(id_lead) DO UPDATE SET universidad_otra=CASE WHEN perfil_academico.id_universidad IS NULL THEN coalesce(perfil_academico.universidad_otra,excluded.universidad_otra) ELSE perfil_academico.universidad_otra END`,
-          [s.id_lead, dto.universidad],
-        );
-        if (dto.universidad && !academicBefore?.id_universidad && !academicBefore?.universidad_otra)
-          await m.query('UPDATE lead SET procedencia_campos=procedencia_campos || $2::jsonb WHERE id_lead=$1', [s.id_lead, JSON.stringify({'perfilAcademico.universidadOtra':{origen:'reserva',confirmado:true}})]);
+        await completeBookingLeadProfile(m, s.id_lead, dto);
         await this.event(m, s.id_solicitud, 'reserva_confirmada');
         return camel(meeting);
       });

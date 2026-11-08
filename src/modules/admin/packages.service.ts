@@ -10,6 +10,8 @@ import type { PackageDto, PackageListDto } from './packages.dto.js';
 import { ExistingPackagesStore } from './existing-packages.store.js';
 
 export interface PackageRecord {
+  guiaRecomendacion?: string | null;
+  prestaciones?: string[];
   idServicio: number;
   codigo: string;
   nombre: string;
@@ -80,7 +82,10 @@ export class PackagesService {
       `SELECT c.id_servicio AS "idServicio",c.cantidad,s.nombre,s.codigo FROM paquete_componente c JOIN servicio s USING(id_servicio) WHERE c.id_paquete=$1 ORDER BY c.id_servicio`,
       [id],
     );
+    const [snapshot] = await m.query('SELECT contenido FROM paquete_version WHERE id_paquete=$1 AND version=$2', [id, s.paquete_version]);
     return {
+      guiaRecomendacion: snapshot?.contenido?.guiaRecomendacion ?? null,
+      prestaciones: snapshot?.contenido?.prestaciones ?? [],
       idServicio: s.id_servicio,
       codigo: s.codigo,
       nombre: s.nombre,
@@ -216,6 +221,8 @@ export class PackagesService {
           [id, c.idServicio, c.cantidad],
         );
       const record = await this.detail(id!, m);
+      record.guiaRecomendacion = dto.guiaRecomendacion === undefined ? prior?.guiaRecomendacion ?? null : dto.guiaRecomendacion?.trim() || null;
+      record.prestaciones = dto.prestaciones ?? prior?.prestaciones ?? [];
       const [previousVersion] = prior
         ? await m.query(
             'SELECT contenido FROM paquete_version WHERE id_paquete=$1 AND version=$2',

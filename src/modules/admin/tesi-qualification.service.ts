@@ -68,7 +68,10 @@ export class TesiQualificationService {
       if (packageId && Number.isSafeInteger(Number(packageId[1])) && Number.isInteger(packageVersion) && Number(packageVersion) > 0) {
         try {
           const packageInfo = await this.packages.forProposal(m, Number(packageId[1]), Number(packageVersion));
-          if (this.corresponds(campos, packageInfo.paquete.componentes.map(c => c.codigo))) servicio = campos.servicio.valor;
+          const codes = packageInfo.paquete.componentes.map(c => c.codigo);
+          // El catálogo existente publica paquetes propios sin componentes históricos.
+          if (!codes.length) codes.push(packageInfo.paquete.codigo);
+          if (this.corresponds(campos, codes)) servicio = campos.servicio.valor;
         } catch (error) {
           if (!(error instanceof Error) || error.name !== 'ConflictException') throw error;
         }

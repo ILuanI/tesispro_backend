@@ -32,6 +32,11 @@ export class PackageDto {
   @ValidateNested({ each: true })
   @Type(() => PackageComponentDto)
   componentes: PackageComponentDto[];
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(16000)
+  guiaRecomendacion?: string | null;
+  @IsOptional() @IsArray() @ArrayMaxSize(50)
+  @IsString({ each: true }) @MinLength(1, { each: true }) @MaxLength(1000, { each: true })
+  prestaciones?: string[];
   @IsArray()
   @ArrayMaxSize(30)
   @IsString({ each: true })

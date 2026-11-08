@@ -52,6 +52,7 @@ export class ExistingPackagesStore {
       nombre: raw.nombre,
       descripcion: raw.descripcion || null,
       publicoObjetivo: stored?.publicoObjetivo ?? null,
+      guiaRecomendacion: stored?.guiaRecomendacion ?? null,
       componentes: stored?.componentes ?? [],
       entregables: raw.entregables || [],
       restricciones: raw.restricciones || [],
@@ -93,7 +94,7 @@ export class ExistingPackagesStore {
     const r = await this.row(id, m);
     return this.normalize(r);
   }
-  async save(dto: PackageDto, user: number, id?: number) {
+  async save(dto: PackageDto, user: number | null, id?: number) {
     return this.db.transaction(async (m) => {
       const prior = id ? await this.row(id, m, true) : null;
       if (prior && dto.version !== prior.version)
@@ -210,10 +211,14 @@ export class ExistingPackagesStore {
         );
         packageId = p.id;
       }
+      if (dto.prestaciones !== undefined) {
+        await m.query('UPDATE paquete SET prestaciones=$1 WHERE id=$2', [dto.prestaciones.map(s => s.trim()), packageId]);
+      }
       const raw = await this.row(id!, m);
       const record: ExistingPackageRecord = {
         ...this.normalize(raw),
         publicoObjetivo: dto.publicoObjetivo?.trim() || null,
+        guiaRecomendacion: dto.guiaRecomendacion === undefined ? prior?.snapshot?._r11?.record?.guiaRecomendacion ?? null : dto.guiaRecomendacion?.trim() || null,
         modalidad: dto.modalidad,
         componentes: dto.componentes.map((c) => {
           const s = parts.find((s: Row) => s.id_servicio === c.idServicio);

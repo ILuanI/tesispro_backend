@@ -18,6 +18,7 @@ import {
 } from './lead-profile.dto.js';
 import { JourneysService } from './journeys.service.js';
 import { TesiQualificationService } from './tesi-qualification.service.js';
+import { completeBookingLeadProfile } from './booking-lead-profile.js';
 const digest = (value: string) =>
   createHash('sha256').update(value).digest('hex');
 export const contactCookie = 'tesispro_contact';
@@ -337,6 +338,7 @@ export class CaptureProfileService {
         await this.identity.converted(m, buyer, lead);
       }
       await this.bind(m, { ...session, id_lead: lead }, buyer, lead);
+      await completeBookingLeadProfile(m, lead, dto);
       await m.query(
         "INSERT INTO reunion(id_reunion,id_lead,id_sesion,clave_idempotencia,fecha_inicio,fecha_fin,nombres,telefono,correo,universidad,descripcion) VALUES($1,$2,$3,$4,$5,$5::timestamptz+interval '30 minutes',$6,$7,$8,$9,$10)",
         [
@@ -486,12 +488,12 @@ export class CaptureProfileService {
         if (!qualification.suficiente || !qualification.servicio || result.state.service !== qualification.servicio) {
           result.proposal = null;
           result.state.service = null;
-          if (!result.state.humanRequested) {
+          if (!result.state.humanRequested && !result.state.catalogMode) {
             result.reply = !qualification.campos.necesidad ? '¿Qué necesitas resolver en tu tesis?' : !qualification.campos.etapa ? '¿En qué etapa se encuentra tu tesis?' : 'Un asesor puede revisar qué servicio se ajusta a tu caso.';
             result.quickReplies = [];
           }
         }
-        if (!result.state.humanRequested) {
+        if (!result.state.humanRequested && !result.state.catalogMode) {
           const confirmations = ['necesidad', 'etapa', 'urgencia', 'servicio', 'nombre', 'universidad', 'grado'].flatMap(key => {
             const item = qualification.campos[key];
             const label = item && item.tipo !== 'confirmado' && typeof item.valor === 'string' ? `Confirmo ${key}: ${item.valor}` : '';

@@ -7,9 +7,11 @@
   },
   "prioridad": ["intencion_contratacion", "alto", "medio", "bajo"],
   "recomendacionRequiere": ["necesidad", "etapa"],
-  "etapasReconocidas": ["tema", "proyecto", "desarrollo", "observacion", "sustentacion", "avance", "analisis"],
+  "etapasReconocidas": ["inicio", "inicial", "empez", "tema", "proyecto", "desarrollo", "observacion", "sustentacion", "avance", "analisis"],
   "correspondencias": [
     { "necesidades": ["estadistic", "analisis", "revis", "observacion", "metodolog", "correccion"], "servicios": ["puntual", "etapas", "integral"] },
-    { "necesidades": ["etapa", "capitulo", "acompan", "integral", "proceso", "tesis"], "servicios": ["etapas", "integral"] }
+    { "necesidades": ["etapa", "capitulo", "acompan", "integral", "proceso", "tesis"], "servicios": ["etapas", "integral", "desarrollo-tecnico"] },
+    { "necesidades": ["orient", "inici", "empez", "tema", "metodolog", "revis", "observacion", "correccion"], "servicios": ["basico", "desarrollo-tecnico", "integral"] },
+    { "necesidades": ["estadistic", "analisis", "datos", "tecnic"], "servicios": ["desarrollo-tecnico", "integral"] }
   ]
 }

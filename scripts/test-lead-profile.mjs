@@ -526,7 +526,7 @@ try {
       break;
     }
   }
-  const booking = { ...contact, fechaInicio: available };
+  const booking = { ...contact, fechaInicio: available, universidad: 'Universidad de prueba de reserva', descripcion: 'Necesito orientación para definir la metodología de mi tesis.' };
   await call('/captacion/reuniones', 'POST', booking, 201);
   await call('/captacion/reuniones', 'POST', booking, 201);
   assert.equal(
@@ -538,6 +538,25 @@ try {
     )[0].n,
     1,
   );
+  const [reservedLead] = await db.query(`SELECT l.id_lead,l.nombres,l.correo,l.telefono,e.codigo AS estado,
+    a.universidad_otra,p.observaciones FROM reunion r JOIN lead l USING(id_lead)
+    JOIN estado_lead e ON e.id_estado=l.id_estado LEFT JOIN perfil_academico a USING(id_lead)
+    LEFT JOIN proyecto_tesis p USING(id_lead) WHERE r.clave_idempotencia=$1`, [contact.clave]);
+  assert.equal(reservedLead.nombres, contact.nombres);
+  assert.equal(reservedLead.correo, contact.correo);
+  assert.equal(reservedLead.telefono, '+51' + contact.telefono);
+  assert.equal(reservedLead.estado, 'nuevo');
+  assert.equal(reservedLead.universidad_otra, booking.universidad);
+  assert.equal(reservedLead.observaciones, booking.descripcion);
+  assert.equal((await call(`/admin/leads/${reservedLead.id_lead}`)).idLead, reservedLead.id_lead);
+  const remainingSlots = await call('/captacion/reuniones/disponibilidad?fecha=' + available.slice(0, 10));
+  assert(remainingSlots.horarios.length);
+  await call('/captacion/reuniones', 'POST', { ...booking, clave: randomUUID(), fechaInicio: remainingSlots.horarios[0], universidad: 'No reemplazar universidad', descripcion: 'Consulta para la segunda reunión' }, 201);
+  assert.equal((await db.query('SELECT count(*)::int n FROM lead WHERE correo=$1', [contact.correo]))[0].n, 1);
+  assert.equal((await db.query('SELECT count(*)::int n FROM proyecto_tesis WHERE id_lead=$1', [reservedLead.id_lead]))[0].n, 1);
+  assert.equal((await db.query('SELECT universidad_otra FROM perfil_academico WHERE id_lead=$1', [reservedLead.id_lead]))[0].universidad_otra, booking.universidad);
+  assert.equal((await db.query('SELECT observaciones FROM proyecto_tesis WHERE id_lead=$1', [reservedLead.id_lead]))[0].observaciones, booking.descripcion);
+  console.log('OK Reserva: lead nuevo con contacto, universidad y consulta; reintento y nueva reserva sin duplicados.');
   if (process.env.R6_UI === '1') {
     const landing = fileURLToPath(
       new URL('../../tesispro-landing/', import.meta.url),
