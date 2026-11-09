@@ -4,7 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 import { entities } from '../entities/index.js';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
+import { postgresOptions } from './postgres.options.js';
 
 @Module({
   imports: [
@@ -12,22 +12,14 @@ import pg from 'pg';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        // Import explicito para incluir pg en el paquete serverless de Vercel.
-        driver: pg,
-        host: config.get<string>('DB_HOST', 'localhost'),
-        port: config.get<number>('DB_PORT', 5432),
-        username: config.get<string>('DB_USERNAME', 'postgres'),
-        password: config.get<string>('DB_PASSWORD', 'postgres'),
-        database: config.get<string>('DB_DATABASE', 'impulse'),
-        ssl: config.get<string>('DB_SSL', 'false') === 'true'
-          ? { rejectUnauthorized: true, ...(config.get<string>('DB_SSL_CA') ? { ca: config.get<string>('DB_SSL_CA')!.replace(/\\n/g, '\n') } : {}) }
-          : false,
+        ...postgresOptions((key) => config.get<string>(key)),
         entities,
         namingStrategy: new SnakeNamingStrategy(),
         synchronize: false,
-        migrationsRun: config.get<string>('DB_RUN_MIGRATIONS', 'false') === 'true',
-        migrations: [fileURLToPath(new URL('../migrations/*.js', import.meta.url))],
+        migrationsRun: config.get<string>('VERCEL') !== '1' && config.get<string>('DB_RUN_MIGRATIONS', 'false') === 'true',
+        migrations: config.get<string>('VERCEL') === '1' ? [] : [fileURLToPath(new URL('../migrations/*.js', import.meta.url))],
+        retryAttempts: config.get<string>('VERCEL') === '1' ? 2 : 10,
+        retryDelay: 1000,
         logging: config.get<string>('DB_LOGGING', 'false') === 'true',
       }),
     }),
