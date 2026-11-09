@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { EntityManager } from 'typeorm';
 import { PackagesService } from './packages.service.js';
 
@@ -18,7 +17,10 @@ export class TesiQualificationService {
   private version = '';
   constructor(private readonly packages: PackagesService) {
     try {
-      const raw = readFileSync(process.env.R7_RULES_FILE || resolve(process.cwd(), 'config/tesi-qualification.json'), 'utf8');
+      // Ruta estatica para que el empaquetador incluya el JSON en la funcion.
+      const raw = process.env.R7_RULES_FILE
+        ? readFileSync(process.env.R7_RULES_FILE, 'utf8')
+        : readFileSync(new URL('../../../config/tesi-qualification.json', import.meta.url), 'utf8');
       const cfg = JSON.parse(raw);
       if (!Array.isArray(cfg.prioridad) || cfg.prioridad.length !== 4 || new Set(cfg.prioridad).size !== 4 || cfg.prioridad.some((x: string) => !levels.includes(x)) || cfg.prioridad[0] !== 'intencion_contratacion' || !cfg.niveles || levels.some(level => !Array.isArray(cfg.niveles[level]) || cfg.niveles[level].some((x: string) => !signals.includes(x))) || JSON.stringify(cfg.recomendacionRequiere) !== JSON.stringify(['necesidad', 'etapa'])) throw new Error('Reglas inválidas');
       if (!cfg.niveles.intencion_contratacion.includes('intencion_contratar') || cfg.niveles.bajo.length || cfg.niveles.intencion_contratacion.some((x: string) => x !== 'intencion_contratar')) throw new Error('Prioridad de contratación inválida');

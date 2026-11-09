@@ -1,7 +1,9 @@
 # Backend en Vercel
 
 El proyecto usa el soporte nativo de NestJS y la entrada `src/main.ts`.
-`vercel.json` fija el framework e incluye `config/tesi-qualification.json`.
+`vercel.json` fija el framework. El archivo `config/tesi-qualification.json`
+se lee mediante una URL estatica relativa al modulo para que el empaquetador lo detecte.
+No se configura `functions.src/main.ts`: el soporte nativo genera la funcion de NestJS.
 Las rutas del backend no llevan el prefijo `/api`.
 
 ## Configuracion del proyecto
