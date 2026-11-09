@@ -6,9 +6,22 @@ async function bootstrap() {
   const { AppModule } = await import('./app.module.js');
   console.info('[bootstrap] Inicializando NestJS y PostgreSQL.');
   const app = await NestFactory.create(AppModule, { abortOnError: false });
+  await app.init();
   console.info('[bootstrap] Modulos inicializados; iniciando servidor HTTP.');
-  await app.listen(process.env.PORT ?? 3000);
-  console.info('[bootstrap] Servidor HTTP listo.');
+  app.getHttpServer().once('listening', () => {
+    console.info('[bootstrap] Servidor HTTP listo.');
+  });
+  const listening = app.listen(process.env.PORT ?? 3000);
+  if (process.env.VERCEL === '1') {
+    // Vercel intercepta listen() y abre el puerto despues de importar este modulo.
+    // Esperar esa promesa aqui bloquearia la importacion y el arranque del servidor.
+    void listening.catch((error: unknown) => {
+      console.error('[bootstrap] No se pudo abrir el servidor HTTP:', error);
+      throw error;
+    });
+  } else {
+    await listening;
+  }
 }
 await bootstrap().catch((error: unknown) => {
   console.error('[bootstrap] No se pudo iniciar el backend:', error);

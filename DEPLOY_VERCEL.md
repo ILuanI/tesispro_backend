@@ -65,3 +65,14 @@ debe devolver `200` y `Hello World!`. Como NestJS inicializa PostgreSQL antes
 de escuchar, esta respuesta confirma que la conexion inicial se completo.
 `GET /auth/me` sin sesion debe devolver `401`.
 Si el arranque falla, revisar Runtime Logs del despliegue que recibe la peticion.
+
+Para comprobar localmente la carga del servidor en Vercel:
+
+```sh
+pnpm test:vercel
+```
+
+Esta prueba requiere una base accesible mediante el `.env` local y no escribe datos.
+Reproduce la interceptacion de `listen()` del cargador: el modulo debe terminar de
+importarse antes de que Vercel abra el puerto. La inicializacion de NestJS y PostgreSQL
+se espera, pero la promesa de `app.listen()` no se espera durante la importacion en Vercel.
