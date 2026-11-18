@@ -19,6 +19,7 @@ import {
 import { journeyConditions } from './journey-filters.js';
 import { ReferralsService } from './referrals.service.js';
 import { completeBookingLeadProfile } from './booking-lead-profile.js';
+import { CalendarService, bookingSlots } from './calendar.service.js';
 
 type Row = Record<string, any>;
 const camel = (r: Row) =>
@@ -43,7 +44,7 @@ const published = `activo=true AND publicado=true`;
 
 @Injectable()
 export class JourneysService {
-  constructor(private readonly db: DataSource, private readonly referrals: ReferralsService, private readonly identity: ContactIdentityService) {}
+  constructor(private readonly db: DataSource, private readonly referrals: ReferralsService, private readonly identity: ContactIdentityService, private readonly calendar: CalendarService) {}
   async publicResources() {
     return this.db.query(
       `SELECT id_recurso AS "idRecurso",titulo,descripcion,categoria,formato FROM recurso_gratuito WHERE ${published} AND destacado=true ORDER BY fecha_actualizacion DESC,id_recurso DESC`,
@@ -193,7 +194,7 @@ export class JourneysService {
     return this.db.transaction(async (m) => {
       const s = await this.access(m, token);
       const [meeting] = await m.query(
-        "SELECT id_reunion,fecha_inicio,estado FROM reunion WHERE id_solicitud=$1 ORDER BY (estado='confirmada') DESC,created_at DESC LIMIT 1",
+        "SELECT id_reunion,fecha_inicio,estado,meet_url,meet_status,event_url FROM reunion WHERE id_solicitud=$1 ORDER BY (estado='confirmada') DESC,created_at DESC LIMIT 1",
         [s.id_solicitud],
       );
       return {
@@ -359,52 +360,46 @@ export class JourneysService {
       return { ok: true, ...bounds() };
     });
   }
-  slots(fecha: string) {
-    const range = bounds();
-    if (fecha < range.desde || fecha > range.hasta)
-      throw new BadRequestException(
-        'Elige una fecha dentro de los próximos 30 días.',
-      );
-    const day = new Date(`${fecha}T12:00:00-05:00`).getUTCDay();
-    if (day === 0 || day === 6) return [];
-    const start = new Date(`${fecha}T09:00:00-05:00`).getTime();
-    return Array.from({ length: 18 }, (_, i) =>
-      new Date(start + i * 1800000).toISOString(),
-    ).filter((iso) => Date.parse(iso) > Date.now());
-  }
+  slots(fecha: string) { return bookingSlots(fecha); }
   async availability(token: string, fecha: string) {
-    return this.db.transaction(async (m) => {
+    await this.db.transaction(async m => {
       const s = await this.access(m, token, true);
-      if (!s.id_lead)
-        throw new BadRequestException('Pulsa primero Agendar reunión.');
-      const slots = this.slots(fecha);
-      const booked = await m.query(
-        "SELECT fecha_inicio FROM reunion WHERE estado='confirmada' AND fecha_inicio=ANY($1::timestamptz[])",
-        [slots],
-      );
-      const occupied = new Set(
-        booked.map((r: Row) => new Date(r.fecha_inicio).toISOString()),
-      );
-      return {
-        fecha,
-        horarios: slots.filter((iso) => !occupied.has(iso)),
-        ...bounds(),
-      };
+      if (!s.id_lead) throw new BadRequestException('Pulsa primero Agendar reuni?n.');
     });
+    return this.calendar.availability(fecha);
   }
   async book(token: string, dto: BookMeetingDto) {
+    await this.calendar.ready();
+    const local = await this.bookLocal(token, dto);
+    const confirmed = await this.calendar.confirm(local.idReunion);
+    if (confirmed.estado !== 'confirmada') throw new ConflictException('Esta reserva fue cancelada en Google. Inicia una nueva solicitud.');
+    return { ...local, ...confirmed };
+  }
+  async retryBooking(token: string) {
+    const meeting = await this.db.transaction(async m => {
+      const access = await this.access(m, token, true);
+      const [r] = await m.query("SELECT id_reunion FROM reunion WHERE id_solicitud=$1 AND estado IN ('pendiente','confirmada') ORDER BY created_at DESC LIMIT 1", [access.id_solicitud]);
+      if (!r) throw new NotFoundException('No hay una reserva pendiente para esta solicitud.');
+      return r.id_reunion;
+    });
+    return this.calendar.confirm(meeting);
+  }
+  private async bookLocal(token: string, dto: BookMeetingDto) {
     const iso = new Date(dto.fechaInicio).toISOString();
     try {
       return await this.db.transaction(async (m) => {
+        await this.calendar.lock(m);
         const s = await this.access(m, token, true);
         if (!s.id_lead)
           throw new BadRequestException('Pulsa primero Agendar reunión.');
         const [prior] = await m.query(
-          "SELECT * FROM reunion WHERE id_solicitud=$1 AND estado='confirmada'",
+          "SELECT * FROM reunion WHERE id_solicitud=$1 AND estado IN ('pendiente','confirmada')",
           [s.id_solicitud],
         );
         if (prior) {
-          if (new Date(prior.fecha_inicio).toISOString() === iso)
+          if (new Date(prior.fecha_inicio).toISOString() === iso && prior.nombres === dto.nombres &&
+            prior.correo === dto.correo && prior.telefono === normalizeContactPhone(dto.telefono) &&
+            (prior.universidad || '') === (dto.universidad || '') && (prior.descripcion || '') === (dto.descripcion || ''))
             return camel(prior);
           throw new ConflictException(
             'Ya tienes una reunión confirmada para esta solicitud.',
@@ -422,6 +417,7 @@ export class JourneysService {
         await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
           'slot:' + iso,
         ]);
+        await this.calendar.reserve(m, iso);
         const owner=await this.identity.resolve(m,dto.correo,telefono);
         if(owner && owner.id_lead!==s.id_lead)throw new ConflictException('Datos de contacto en conflicto. Solicita revisión administrativa.');
         const [lead] = await m.query(
@@ -459,14 +455,13 @@ export class JourneysService {
           ],
         );
         await m.query(
-          'UPDATE lead SET nombres=coalesce(nombres,$3),correo=coalesce(correo,$1),reserva_pendiente=false,revision=revision+1,updated_at=now(),procedencia_campos=procedencia_campos || $4::jsonb WHERE id_lead=$2',
+          'UPDATE lead SET nombres=coalesce(nombres,$3),correo=coalesce(correo,$1),reserva_pendiente=true,revision=revision+1,updated_at=now(),procedencia_campos=procedencia_campos || $4::jsonb WHERE id_lead=$2',
           [dto.correo, s.id_lead, dto.nombres, JSON.stringify({
             ...(!lead.nombres ? {nombres:{origen:'reserva',confirmado:true}} : {}),
             ...(!lead.correo ? {correo:{origen:'reserva',confirmado:true}} : {}),
           })],
         );
         await completeBookingLeadProfile(m, s.id_lead, dto);
-        await this.event(m, s.id_solicitud, 'reserva_confirmada');
         return camel(meeting);
       });
     } catch (error) {
@@ -569,27 +564,6 @@ export class JourneysService {
     };
   }
   async cancel(id: string, motivo: string, usuario: number) {
-    return this.db.transaction(async (m) => {
-      const [r] = await m.query(
-        'SELECT * FROM reunion WHERE id_reunion=$1 FOR UPDATE',
-        [id],
-      );
-      if (!r) throw new NotFoundException('Reunión no encontrada.');
-      if (r.estado === 'confirmada') {
-        await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
-          'slot:' + new Date(r.fecha_inicio).toISOString(),
-        ]);
-        await m.query(
-          "UPDATE reunion SET estado='cancelada',motivo_cancelacion=$1,cancelada_at=now(),id_usuario_cancelacion=$3 WHERE id_reunion=$2",
-          [motivo, id, usuario],
-        );
-        if(r.id_solicitud)await this.event(m, r.id_solicitud, 'reserva_cancelada');
-        await m.query(
-          "UPDATE lead SET reserva_pendiente=NOT EXISTS(SELECT 1 FROM reunion WHERE id_lead=$1 AND estado='confirmada' AND fecha_inicio>now()),revision=revision+1,updated_at=now() WHERE id_lead=$1",
-          [r.id_lead],
-        );
-      }
-      return { ok: true };
-    });
+    return this.calendar.cancel(id, motivo, usuario);
   }
 }

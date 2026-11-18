@@ -19,6 +19,7 @@ import type { Request, Response } from 'express';
 import { AuthService, Public, type AdminRequest } from './auth.js';
 import { ReferralsService, referralCookie } from './referrals.service.js';
 import { JourneysService } from './journeys.service.js';
+import { CalendarService } from './calendar.service.js';
 import {
   AttributionDto,
   AvailabilityDto,
@@ -45,6 +46,7 @@ export class PublicResourcesController {
     private readonly auth: AuthService,
     private readonly capture: CaptureProfileService,
     private readonly referrals: ReferralsService,
+    private readonly calendar: CalendarService,
   ) {}
   @Get() list() {
     return this.service.publicResources();
@@ -84,9 +86,15 @@ export class PublicResourcesController {
   ) {
     return this.service.availability(token(req), dto.fecha);
   }
-  @Post('reservas') book(@Req() req: Request, @Body() dto: BookMeetingDto) {
+  @Post('reservas') async book(@Req() req: Request, @Body() dto: BookMeetingDto) {
     this.auth.checkOrigin(req);
+    await this.calendar.limit(req.ip || 'unknown');
     return this.service.book(token(req), dto);
+  }
+  @Post('reservas/reintentar') async retryBooking(@Req() req: Request) {
+    this.auth.checkOrigin(req);
+    await this.calendar.limit(req.ip || 'unknown');
+    return this.service.retryBooking(token(req));
   }
   @Post('descarga') async download(
     @Req() req: Request,

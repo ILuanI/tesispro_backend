@@ -34,7 +34,7 @@ describe('Conversación de Tesi con paquetes publicados', () => {
     } };
     const capture = new CaptureProfileService({ transaction: async (fn: any) => fn(m) } as any, {} as any, {} as any, {
       evaluate: async () => ({ suficiente: false, servicio: null, campos: { necesidad: { valor: 'orientación inicial', tipo: 'inferido' } } }),
-    } as any);
+    } as any, {} as any);
     const saved = await capture.finish('test-token', { idTurno: 'test-turn', mensaje: 'Quiero empezar mi tesis', respuesta: reply, resultadoJson: JSON.stringify(result) });
     expect(saved.resultado.reply).toBe(reply);
     expect(saved.resultado.quickReplies).toEqual(['Aún no tengo tema']);

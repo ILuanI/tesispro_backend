@@ -87,7 +87,7 @@ export class JourneyListDto extends JourneyFilterDto {
   @IsOptional() @IsString() @Matches(/^[1-9]\d{0,17}$/) lead?: string;
 }
 export class MeetingListDto extends JourneyListDto {
-  @IsOptional() @IsIn(['confirmada', 'cancelada']) estado?: string;
+  @IsOptional() @IsIn(['pendiente', 'confirmada', 'cancelada']) estado?: string;
   @IsOptional() @IsString() @MaxLength(150) q?: string;
   @IsOptional()
   @IsISO8601({ strict: true })

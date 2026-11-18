@@ -1,33 +1,23 @@
-import { PaymentVerificationService } from './payment-verification.service.js';
+import { AdminServicesModule } from './admin-services.module.js';
+import { KnowledgeModule } from '../knowledge/knowledge.module.js';
+import { KnowledgeController, KnowledgeInternalController } from '../knowledge/knowledge.controller.js';
+import { CalendarController, GoogleCalendarCallbackController } from './calendar.controller.js';
 import { PaymentVerificationController } from './payment-verification.controller.js';
-import { PaymentSchedulesService } from './payment-schedules.service.js';
 import { PaymentSchedulesController } from './payment-schedules.controller.js';
-import { ContactIdentityService } from './contact-identity.service.js';
-import { CommercialProposalService } from './commercial-proposal.service.js';
 import { CommercialProposalController } from './commercial-proposal.controller.js';
-import { TesiQualificationService } from './tesi-qualification.service.js';
-import { LeadProfileService } from './lead-profile.service.js';
-import { CaptureProfileService } from './capture-profile.service.js';
 import { LeadProfileController, CaptureProfileController, TesiProfileController, ConversationQualificationController } from './lead-profile.controller.js';
 import { ArgumentsHost, Catch, ExceptionFilter, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { QueryFailedError } from 'typeorm';
-import { AuthController, AuthService, AdminGuard } from './auth.js';
+import { AuthController, AdminGuard } from './auth.js';
 import { AdminController } from './admin.controller.js';
-import { AdminService } from './admin.service.js';
 import { ContractsController } from './contracts.controller.js';
-import { ContractsService } from './contracts.service.js';
 import { ResourcesController } from './resources.controller.js';
-import { ResourcesService } from './resources.service.js';
 import {
   BuyersController,
   CaptureBuyersController,
 } from './buyers.controller.js';
-import { BuyersService } from './buyers.service.js';
-import { JourneysService } from './journeys.service.js';
-import { PackagesService } from './packages.service.js';
 import { PackagesController, PublicPackagesController } from './packages.controller.js';
-import { ReferralsService } from './referrals.service.js';
 import { ReferralsController, PublicReferralsController } from './referrals.controller.js';
 import {
   PublicResourcesController,
@@ -65,7 +55,10 @@ class DatabaseErrorFilter implements ExceptionFilter {
   }
 }
 @Module({
+  imports: [AdminServicesModule, KnowledgeModule],
   controllers: [
+    KnowledgeController, KnowledgeInternalController,
+    CalendarController, GoogleCalendarCallbackController,
     PaymentVerificationController,
     PaymentSchedulesController,
     CommercialProposalController,
@@ -84,18 +77,6 @@ class DatabaseErrorFilter implements ExceptionFilter {
     JourneysAdminController,
   ],
   providers: [
-    PaymentVerificationService,
-    PaymentSchedulesService,
-    CommercialProposalService,
-    PackagesService,
-    ReferralsService,
-    AuthService,
-    ContactIdentityService, LeadProfileService, CaptureProfileService, TesiQualificationService,
-    AdminService,
-    ContractsService,
-    ResourcesService,
-    BuyersService,
-    JourneysService,
     { provide: APP_GUARD, useClass: AdminGuard },
     { provide: APP_FILTER, useClass: DatabaseErrorFilter },
   ],

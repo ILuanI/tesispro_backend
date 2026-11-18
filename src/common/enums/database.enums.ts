@@ -36,6 +36,9 @@ export enum TipoRemitente {
 export enum TipoAgente {
   MARKETING = 'marketing',
   NEGOCIADOR = 'negociador',
+  COBRANZA = 'cobranza',
+  ACADEMICO = 'academico',
+  POSTVENTA = 'postventa',
 }
 
 export enum RolUsuario {
