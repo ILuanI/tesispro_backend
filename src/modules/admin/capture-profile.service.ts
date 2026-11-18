@@ -241,6 +241,7 @@ export class CaptureProfileService {
     );
     return {
       horarios: slots.filter((s) => !booked.has(s)),
+      horariosOcupados: slots.filter((s) => booked.has(s)),
       desde: new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10),
       hasta: new Date(Date.now() + 29 * 86400000 - 5 * 3600000)
         .toISOString()
