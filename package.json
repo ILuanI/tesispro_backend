@@ -10,6 +10,8 @@
     "node": "24.x"
   },
   "scripts": {
+    "test:agents": "pnpm build && node scripts/test-agents.mjs",
+    "test:agents:browser": "pnpm build && node scripts/test-agents.mjs --browser",
     "seed": "pnpm build && node scripts/seed.mjs",
     "test:seed": "pnpm build && node scripts/test-seed.mjs",
     "test:packages": "pnpm build && node scripts/test-packages.mjs",
@@ -46,9 +48,13 @@
     "test:lead-profile": "pnpm build && node scripts/test-lead-profile.mjs",
     "test:payment-schedules": "pnpm build && node scripts/test-payment-schedules.mjs",
     "test:payment-verification": "pnpm build && node scripts/test-payment-verification.mjs",
-    "test:requirements": "pnpm build && node scripts/test-requirements.mjs"
+    "test:requirements": "pnpm build && node scripts/test-requirements.mjs",
+    "test:calendar": "pnpm build && node scripts/test-calendar.mjs",
+    "knowledge:bootstrap": "pnpm build && node scripts/bootstrap-knowledge.mjs",
+    "test:knowledge": "pnpm build && node scripts/test-knowledge.mjs"
   },
   "dependencies": {
+    "@googleapis/calendar": "^20.2.0",
     "@nestjs/common": "^12.0.1",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "^12.0.1",
@@ -57,11 +63,13 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dotenv": "^18.0.7",
+    "google-auth-library": "^11.3.4",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "typeorm": "^1.1.2",
-    "typeorm-naming-strategies": "^4.1.0"
+    "typeorm-naming-strategies": "^4.1.0",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@nestjs/cli": "^12.0.0",

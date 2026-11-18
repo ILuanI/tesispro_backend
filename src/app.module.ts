@@ -1,3 +1,4 @@
+import { AgentsModule } from './modules/agents/agents.module.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller.js';
@@ -16,6 +17,7 @@ import { AdminModule } from './modules/admin/admin.module.js';
 @Module({
   imports: [
     AdminModule,
+    AgentsModule,
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     AcademicoModule,

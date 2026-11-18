@@ -17,6 +17,7 @@ import {
   TesiFinishDto,
 } from './lead-profile.dto.js';
 import { JourneysService } from './journeys.service.js';
+import { CalendarService, calendarResult } from './calendar.service.js';
 import { TesiQualificationService } from './tesi-qualification.service.js';
 import { completeBookingLeadProfile } from './booking-lead-profile.js';
 const digest = (value: string) =>
@@ -35,6 +36,7 @@ export class CaptureProfileService {
     private readonly identity: ContactIdentityService,
     private readonly journeys: JourneysService,
     private readonly qualification: TesiQualificationService,
+    private readonly calendar: CalendarService,
   ) {}
   async session(
     m: EntityManager,
@@ -231,29 +233,28 @@ export class CaptureProfileService {
     return { ok: true, token: result.session.token };
   }
   async generalAvailability(fecha: string) {
-    const slots = this.journeys.slots(fecha);
-    const occupied = await this.db.query(
-      "SELECT fecha_inicio FROM reunion WHERE estado='confirmada' AND fecha_inicio=ANY($1::timestamptz[])",
-      [slots],
-    );
-    const booked = new Set(
-      occupied.map((r: any) => new Date(r.fecha_inicio).toISOString()),
-    );
-    return {
-      horarios: slots.filter((s) => !booked.has(s)),
-      horariosOcupados: slots.filter((s) => booked.has(s)),
-      desde: new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10),
-      hasta: new Date(Date.now() + 29 * 86400000 - 5 * 3600000)
-        .toISOString()
-        .slice(0, 10),
-    };
+    return this.calendar.availability(fecha);
+  }
+  async meetingStatus(token: string, clave: string, retry = false) {
+    const [r] = await this.db.query(`SELECT r.* FROM reunion r JOIN acceso_contacto a ON a.id_sesion=r.id_sesion
+      WHERE a.token_hash=$1 AND a.expires_at>now() AND r.clave_idempotencia=$2`, [digest(token), clave]);
+    if (!r) throw new UnauthorizedException('No se encontró una reserva para esta sesión.');
+    return retry ? this.calendar.confirm(r.id_reunion) : calendarResult(r);
   }
   async book(token: string, dto: GeneralMeetingDto) {
+    await this.calendar.ready();
+    const result = await this.bookLocal(token, dto);
+    const meeting = await this.calendar.confirm(result.idReunion);
+    if (meeting.estado !== 'confirmada') throw new ConflictException('Esta reserva fue cancelada en Google. Inicia una nueva solicitud.');
+    return { ...meeting, ok: true, token: result.token };
+  }
+  private async bookLocal(token: string, dto: GeneralMeetingDto) {
     if (!dto.nombres?.trim() || !dto.telefono?.trim() || !dto.correo?.trim())
       throw new BadRequestException(
         'Indica nombre, WhatsApp y correo para reservar.',
       );
     return this.db.transaction(async (m) => {
+      await this.calendar.lock(m);
       await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         'meeting:' + dto.clave,
       ]);
@@ -266,6 +267,7 @@ export class CaptureProfileService {
         'SELECT * FROM reunion WHERE clave_idempotencia=$1',
         [dto.clave],
       );
+
       if (prior) {
         if (
           new Date(prior.fecha_inicio).toISOString() !==
@@ -276,6 +278,7 @@ export class CaptureProfileService {
           ok: true,
           token: session.token,
           fechaInicio: prior.fecha_inicio,
+          idReunion: prior.id_reunion,
         };
       }
       const iso = new Date(dto.fechaInicio).toISOString();
@@ -301,6 +304,7 @@ export class CaptureProfileService {
         throw new ConflictException(
           'Ese horario acaba de reservarse. Elige otro.',
         );
+      await this.calendar.reserve(m, iso);
       let lead = found;
       if (!lead) {
         const [b] = await m.query(
@@ -340,10 +344,11 @@ export class CaptureProfileService {
       }
       await this.bind(m, { ...session, id_lead: lead }, buyer, lead);
       await completeBookingLeadProfile(m, lead, dto);
+      const meetingId = randomUUID();
       await m.query(
         "INSERT INTO reunion(id_reunion,id_lead,id_sesion,clave_idempotencia,fecha_inicio,fecha_fin,nombres,telefono,correo,universidad,descripcion) VALUES($1,$2,$3,$4,$5,$5::timestamptz+interval '30 minutes',$6,$7,$8,$9,$10)",
         [
-          randomUUID(),
+          meetingId,
           lead,
           session.id_sesion,
           dto.clave,
@@ -356,10 +361,10 @@ export class CaptureProfileService {
         ],
       );
       await m.query(
-        'UPDATE lead SET reserva_pendiente=false,revision=revision+1,updated_at=now() WHERE id_lead=$1',
+        'UPDATE lead SET reserva_pendiente=true,revision=revision+1,updated_at=now() WHERE id_lead=$1',
         [lead],
       );
-      return { ok: true, token: session.token, fechaInicio: iso };
+      return { ok: true, token: session.token, fechaInicio: iso, idReunion: meetingId };
     });
   }
   private async conversation(m: EntityManager, session: any) {
@@ -376,18 +381,22 @@ export class CaptureProfileService {
         'SELECT id_sesion FROM acceso_contacto WHERE token_hash=$1 AND expires_at>now() FOR UPDATE',
         [digest(token)],
       );
-      if (session)
+      if (session) {
+        const [human] = await m.query("SELECT 1 FROM conversacion WHERE id_sesion=$1 AND estado='derivada' AND cerrada_en IS NULL", [session.id_sesion]);
+        if (human) throw new ConflictException('Un asesor debe reanudar la atención antes de reiniciar.');
         await m.query(
           "UPDATE conversacion SET estado='cerrada',cerrada_en=now() WHERE id_sesion=$1 AND cerrada_en IS NULL",
           [session.id_sesion],
         );
+      }
       return { ok: true };
     });
   }
-  async begin(token: string, dto: TesiBeginDto) {
+  async begin(token: string, dto: TesiBeginDto, engine: 'legacy' | 'agents' = 'legacy') {
     return this.db.transaction(async (m) => {
       const session = await this.session(m, token);
       const c = await this.conversation(m, session);
+      if (engine === 'legacy' && c.agente_expira && new Date(c.agente_expira).getTime() > Date.now()) throw new ConflictException('Hay un turno de agentes en proceso.');
       await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         'turn:' + dto.idTurno,
       ]);
@@ -395,6 +404,7 @@ export class CaptureProfileService {
         'SELECT t.*,m.contenido FROM turno_tesi t JOIN mensaje m USING(id_mensaje) WHERE id_turno=$1',
         [dto.idTurno],
       );
+      if (prior && (prior.motor || 'legacy') !== engine) throw new ConflictException('Turno iniciado con otro motor.');
       if (prior) {
         if (
           prior.id_conversacion !== c.id_conversacion ||
@@ -403,6 +413,14 @@ export class CaptureProfileService {
           throw new ConflictException('Turno no disponible.');
         if (prior.respuesta)
           return { token: session.token, resultado: prior.respuesta };
+      }
+      let reservation: string | undefined;
+      if (engine === 'agents') {
+        await m.query('SELECT id_conversacion FROM conversacion WHERE id_conversacion=$1 FOR UPDATE', [c.id_conversacion]);
+        const [busy] = await m.query('SELECT 1 FROM conversacion WHERE id_conversacion=$1 AND agente_expira>now()', [c.id_conversacion]);
+        if (busy) throw new ConflictException('Hay un turno en proceso. Reintenta en unos segundos.');
+        reservation = randomUUID();
+        await m.query("UPDATE conversacion SET agente_turno=$2,agente_reserva=$3,agente_expira=now()+interval '30 seconds' WHERE id_conversacion=$1", [c.id_conversacion,dto.idTurno,reservation]);
       }
       const [previous] = await m.query(
         'SELECT respuesta FROM turno_tesi WHERE id_conversacion=$1 AND respuesta IS NOT NULL AND id_turno<>$2 ORDER BY created_at DESC,id_turno DESC LIMIT 1',
@@ -423,6 +441,7 @@ export class CaptureProfileService {
       if (prior)
         return {
           token: session.token,
+          reservation, conversation: c.id_conversacion, attention: c.estado,
           resultado: null,
           estado: previous?.respuesta?.state || null,
           history,
@@ -437,8 +456,10 @@ export class CaptureProfileService {
         'INSERT INTO turno_tesi(id_turno,id_conversacion,id_mensaje) VALUES($1,$2,$3)',
         [dto.idTurno, c.id_conversacion, msg.id_mensaje],
       );
+      if (engine === 'agents') await m.query('UPDATE turno_tesi SET motor=$2 WHERE id_turno=$1', [dto.idTurno,engine]);
       return {
         token: session.token,
+        reservation, conversation: c.id_conversacion, attention: c.estado,
         resultado: null,
         estado: previous?.respuesta?.state || null,
         history,
@@ -447,7 +468,7 @@ export class CaptureProfileService {
       };
     });
   }
-  async finish(token: string, dto: TesiFinishDto) {
+  async finish(token: string, dto: TesiFinishDto, reservation?: string, requests: {agent:string; content:string}[] = []) {
     let result: any;
     try {
       result = JSON.parse(dto.resultadoJson);
@@ -476,7 +497,22 @@ export class CaptureProfileService {
         turn.contenido !== dto.mensaje
       )
         throw new ConflictException('Turno no disponible.');
+      if (turn.motor === 'agents' && !reservation) throw new ConflictException('El turno requiere el motor de agentes.');
       if (turn.respuesta) return { ok: true, resultado: turn.respuesta };
+      if (reservation) {
+        const [valid] = await m.query('SELECT estado FROM conversacion WHERE id_conversacion=$1 AND agente_turno=$2 AND agente_reserva=$3 AND agente_expira>now() FOR UPDATE', [turn.id_conversacion,dto.idTurno,reservation]);
+        if (!valid) throw new ConflictException('Reserva vencida. Reintenta el turno.');
+        if (valid.estado === 'derivada' && result.orchestration?.attention !== 'human') throw new ConflictException('La atencion paso a un asesor.');
+        for (const request of requests) {
+          const [saved] = await m.query('INSERT INTO agente_solicitud(id_turno,id_conversacion,agente,contenido) VALUES($1,$2,$3,$4) ON CONFLICT(id_turno,agente) DO UPDATE SET id_turno=excluded.id_turno RETURNING id_solicitud', [dto.idTurno,turn.id_conversacion,request.agent,request.content]);
+          result.reply += `\nSolicitud registrada: ${saved.id_solicitud}.`;
+        }
+        if (result.orchestration?.attention === 'human') {
+          await m.query("UPDATE conversacion SET estado='derivada' WHERE id_conversacion=$1", [turn.id_conversacion]);
+          await m.query("INSERT INTO derivacion_humana(id_conversacion,id_lead,motivo) VALUES($1,$2,'Solicitud de atencion web') ON CONFLICT (id_conversacion) WHERE estado IN ('pendiente','en_atencion') DO NOTHING", [turn.id_conversacion,session.id_lead]);
+        }
+      }
+
       const [previous] = await m.query(
         'SELECT respuesta FROM turno_tesi WHERE id_conversacion=$1 AND respuesta IS NOT NULL AND id_turno<>$2 AND created_at<=$3 ORDER BY created_at DESC,id_turno DESC LIMIT 1',
         [turn.id_conversacion, dto.idTurno, turn.created_at],
@@ -555,6 +591,7 @@ export class CaptureProfileService {
         'UPDATE sesion_landing SET tuvo_interaccion=true WHERE id_sesion=$1',
         [session.id_sesion],
       );
+      if (reservation) await m.query('UPDATE conversacion SET agente_turno=NULL,agente_reserva=NULL,agente_expira=NULL WHERE id_conversacion=$1 AND agente_reserva=$2', [turn.id_conversacion,reservation]);
       return { ok: true, resultado: result };
     });
   }

@@ -1,4 +1,5 @@
 import { currentMigrations } from './test-migrations.mjs';
+import './mock-calendar.mjs';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 // API y navegador contra PostgreSQL real, siempre en un esquema temporal.

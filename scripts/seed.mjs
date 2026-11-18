@@ -9,6 +9,7 @@ import { CommercialProposalService } from '../dist/modules/admin/commercial-prop
 import { TesiQualificationService } from '../dist/modules/admin/tesi-qualification.service.js';
 import { ReferralsService } from '../dist/modules/admin/referrals.service.js';
 import { JourneysService } from '../dist/modules/admin/journeys.service.js';
+import { CalendarService, calendarResult } from '../dist/modules/admin/calendar.service.js';
 import { ResourcesService } from '../dist/modules/admin/resources.service.js';
 import { PaymentVerificationService } from '../dist/modules/admin/payment-verification.service.js';
 import { PaymentSchedulesService } from '../dist/modules/admin/payment-schedules.service.js';
@@ -83,7 +84,16 @@ export async function seed(db) {
     const commercial = new CommercialProposalService(scoped, packages);
     const qualification = new TesiQualificationService(packages);
     const resources = new ResourcesService(scoped);
-    const journeys = new JourneysService(scoped, new ReferralsService(scoped), identity);
+    // Demo meetings stay local and must never invite real people through Google.
+    const fixtureCalendar = new CalendarService(scoped, { client: async () => ({}) });
+    fixtureCalendar.confirm = async id => {
+      const [prior] = await m.query('SELECT * FROM reunion WHERE id_reunion=$1', [id]);
+      await m.query("UPDATE reunion SET estado='confirmada' WHERE id_reunion=$1", [id]);
+      const [saved] = await m.query('SELECT * FROM reunion WHERE id_reunion=$1', [id]);
+      await fixtureCalendar.updateLead(m, prior);
+      return calendarResult(saved);
+    };
+    const journeys = new JourneysService(scoped, new ReferralsService(scoped), identity, fixtureCalendar);
     const payments = new PaymentVerificationService(scoped);
     const schedules = new PaymentSchedulesService(scoped, payments);
     const administration = new AdminService(scoped, profiles, schedules);

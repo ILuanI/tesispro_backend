@@ -1,4 +1,6 @@
 import { developmentUiProxy } from './development-ui-proxy.mjs';
+import './mock-calendar.mjs';
+import { KnowledgeService } from '../dist/modules/knowledge/knowledge.service.js';
 import 'reflect-metadata';
 import 'dotenv/config';
 import assert from 'node:assert/strict';
@@ -30,6 +32,7 @@ try {
   db = new DataSource(options);
   await db.initialize();
   await db.runMigrations();
+  await new KnowledgeService(db).bootstrap();
   await db.query(
     "INSERT INTO usuario_interno(nombres,apellidos,correo,rol,password_hash) VALUES('Admin','R6','r6@example.test','administrador',$1)",
     [await passwordHash('profile-test-123')],
@@ -449,7 +452,7 @@ try {
   try {
     await control.query(`CREATE SCHEMA ${legacySchema}`);
     const names = (await readdir(new URL('../dist/migrations/', import.meta.url)))
-      .filter((name) => name.endsWith('.js') && !name.includes('LeadProfiling') && !name.includes('TesiQualification'));
+      .filter((name) => name.endsWith('.js') && !name.includes('LeadProfiling') && !name.includes('TesiQualification') && !name.includes('AgentOrchestration'));
     const migrations = await Promise.all(names.map(async (name) => Object.values(await import(`../dist/migrations/${name}`))[0]));
     legacy = new DataSource({ ...source.options, schema: legacySchema, migrations, extra: {options:`-c search_path=${legacySchema}`} });
     await legacy.initialize(); await legacy.runMigrations();

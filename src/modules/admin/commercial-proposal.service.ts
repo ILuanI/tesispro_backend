@@ -1,3 +1,4 @@
+import { AiService } from '../ai/ai.service.js';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 import { cents, decimal } from './money.js';
@@ -6,7 +7,18 @@ import { CommercialServiceDto, ProposalActionDto, ProposalDraftDto } from './com
 
 @Injectable()
 export class CommercialProposalService {
-  constructor(private readonly db: DataSource, private readonly packages: PackagesService) {}
+  constructor(private readonly db: DataSource, private readonly packages: PackagesService, private readonly ai: AiService) {}
+  private async generateText(input: unknown) {
+    if (process.env.AGENTS_ENABLED === 'true') return this.ai.proposal(input);
+    const secret = process.env.CRM_BRIDGE_SECRET || '';
+    if (secret.length < 32) throw new ServiceUnavailableException('Integración de IA no configurada.');
+    const response = await fetch(process.env.R8_AI_URL || 'http://localhost:4321/api/internal/proposal', {
+      method:'POST', headers:{'Content-Type':'application/json','X-CRM-Secret':secret},
+      body:JSON.stringify(input), signal:AbortSignal.timeout(30000),
+    });
+    if (!response.ok) throw new ServiceUnavailableException('No se pudo generar la propuesta.');
+    return response.json();
+  }
   async catalog() {
     const legacy = await this.packages.isExistingCatalog();
     const servicios = await this.db.query(`SELECT s.id_servicio AS "idServicio",s.codigo,s.nombre,s.descripcion,s.activo AS "servicioActivo",c.precio,c.moneda,c.activo,c.plazo_dias AS "plazoDias",c.entregables,c.condiciones,c.descuento_max AS "descuentoMax",c.revision FROM servicio s LEFT JOIN r8_servicio_comercial c USING(id_servicio) WHERE NOT coalesce((to_jsonb(s)->>'es_paquete')::boolean,false) ${legacy ? 'AND NOT EXISTS(SELECT 1 FROM paquete p WHERE p.id_servicio=s.id_servicio)' : ''} ORDER BY s.nombre`);
@@ -25,12 +37,8 @@ export class CommercialProposalService {
     const catalog=await this.catalog();
     const components=[...catalog.servicios.filter((s:any)=>s.activo && s.servicioActivo).map((s:any)=>({idServicio:s.idServicio,nombre:s.nombre,descripcion:String(s.descripcion || '').slice(0,2000)})), ...catalog.paquetes.map(p=>({idServicio:p.idServicio,nombre:`Paquete ${p.nombre}`,descripcion:(p.descripcion || '').slice(0,2000),componentes:p.componentes.map(c=>c.nombre)}))].slice(0,50);
     if(!components.length) throw new BadRequestException('Configura primero servicios comerciales activos.');
-    const secret=process.env.CRM_BRIDGE_SECRET || '';
-    if(secret.length<32) throw new ServiceUnavailableException('Integración de IA no configurada.');
     try {
-      const response=await fetch(process.env.R8_AI_URL || 'http://localhost:4321/api/internal/proposal',{method:'POST',headers:{'Content-Type':'application/json','X-CRM-Secret':secret},body:JSON.stringify({perfil:{...profile,perfilAcademico:academic || null,perfilLaboral:work || null,proyectos:projects},calificacion:qualification.resultado,componentes:components}),signal:AbortSignal.timeout(30000)});
-      if(!response.ok) throw new Error('AI unavailable');
-      const result=await response.json();
+      const result=await this.generateText({perfil:{...profile,perfilAcademico:academic || null,perfilLaboral:work || null,proyectos:projects},calificacion:qualification.resultado,componentes:components});
       if(!Array.isArray(result.ids) || result.ids.some((id:any)=>!components.some((s:any)=>s.idServicio===id))) throw new Error('Invalid IDs');
       const ids = [...new Set<number>(result.ids)];
       const selectedPackages = catalog.paquetes.filter(p=>ids.includes(p.idServicio));
@@ -128,18 +136,13 @@ export class CommercialProposalService {
     const [review] = await this.db.query("SELECT despues->>'accion' AS accion FROM evento_perfil WHERE id_lead=$1 AND tipo='revision_calificacion' AND despues->>'grupo'='campos' AND despues->>'campo'='necesidad' AND despues->>'idCalificacion'=$2 ORDER BY id_evento DESC LIMIT 1",[lead,String(qualification.id_calificacion)]);
     if (review?.accion==='rechazar') throw new BadRequestException('La necesidad fue rechazada; actualiza su evaluación antes de continuar.');
     const preliminary = await this.db.transaction(m=>this.calculate(m,dto));
-    const secret=process.env.CRM_BRIDGE_SECRET || '';
-    const endpoint=process.env.R8_AI_URL || 'http://localhost:4321/api/internal/proposal';
     let ai: any;
     if(dto.textoManual?.trim()) {
       if(!proposal) throw new BadRequestException('El texto manual requiere una propuesta existente.');
       if(/\d|[%$€]|\b(precio|descuento|garant[ií]a|garantiza|plazo|fecha|condiciones|entregable|costo|tarifa)\b/i.test(dto.textoManual)) throw new BadRequestException('Registra importes, entregables y condiciones en los campos comerciales, no en la descripción.');
       ai={texto:dto.textoManual.trim(),ids:preliminary.componentes.map(x=>x.idServicio)};
     } else try {
-      if (secret.length<32) throw new Error('Integración no configurada');
-      const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json','X-CRM-Secret':secret},body:JSON.stringify({perfil:profileSnapshot,calificacion:qualification.resultado,componentes:preliminary.componentes.map(x=>({idServicio:x.idServicio,nombre:x.nombre,descripcion:String(x.descripcion || '').slice(0,2000)}))}),signal:AbortSignal.timeout(30000)});
-      if(!response.ok) throw new Error('AI unavailable');
-      ai=await response.json();
+      ai=await this.generateText({perfil:profileSnapshot,calificacion:qualification.resultado,componentes:preliminary.componentes.map(x=>({idServicio:x.idServicio,nombre:x.nombre,descripcion:String(x.descripcion || '').slice(0,2000)}))});
       if(typeof ai?.texto!=='string' || !ai.texto.trim() || ai.texto.length>5000 || !Array.isArray(ai.ids) || ai.ids.some((id:any)=>!preliminary.componentes.some(x=>x.idServicio===id))) throw new Error('Invalid AI result');
     } catch { throw new ServiceUnavailableException('No se pudo generar la propuesta con IA.'); }
     return this.db.transaction(async m=>{

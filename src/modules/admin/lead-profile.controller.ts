@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -34,6 +35,7 @@ import {
   QualificationReviewDto,
 } from './lead-profile.dto.js';
 import { AvailabilityDto } from './journeys.dto.js';
+import { CalendarService } from './calendar.service.js';
 const validation = new ValidationPipe({
   transform: true,
   whitelist: true,
@@ -130,6 +132,7 @@ export class CaptureProfileController {
   constructor(
     private readonly capture: CaptureProfileService,
     private readonly auth: AuthService,
+    private readonly calendar: CalendarService,
   ) {}
   @Post('sesion') async session(
     @Req() req: Request,
@@ -156,18 +159,28 @@ export class CaptureProfileController {
   @Get('reuniones/disponibilidad') availability(@Query() dto: AvailabilityDto) {
     return this.capture.generalAvailability(dto.fecha);
   }
+  @Get('reuniones/:clave/estado') meetingStatus(@Param('clave', ParseUUIDPipe) clave: string, @Req() req: Request) {
+    return this.capture.meetingStatus(cookieToken(req.headers.cookie), clave);
+  }
+  @Post('reuniones/:clave/reintentar') async retryMeeting(@Param('clave', ParseUUIDPipe) clave: string, @Req() req: Request) {
+    this.auth.checkOrigin(req);
+    await this.calendar.limit(req.ip || 'unknown');
+    return this.capture.meetingStatus(cookieToken(req.headers.cookie), clave, true);
+  }
   @Post('reuniones') async meeting(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
     @Body() dto: GeneralMeetingDto,
   ) {
     this.auth.checkOrigin(req);
+    await this.calendar.limit(req.ip || 'unknown');
     const result = await this.capture.book(
       cookieToken(req.headers.cookie),
       dto,
     );
     setContactCookie(res, result.token);
-    return { ok: true, fechaInicio: result.fechaInicio };
+    const { token: _token, ...meeting } = result;
+    return meeting;
   }
 }
 @Public()
