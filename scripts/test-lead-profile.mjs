@@ -559,6 +559,30 @@ try {
   assert.equal((await db.query('SELECT count(*)::int n FROM proyecto_tesis WHERE id_lead=$1', [reservedLead.id_lead]))[0].n, 1);
   assert.equal((await db.query('SELECT universidad_otra FROM perfil_academico WHERE id_lead=$1', [reservedLead.id_lead]))[0].universidad_otra, booking.universidad);
   assert.equal((await db.query('SELECT observaciones FROM proyecto_tesis WHERE id_lead=$1', [reservedLead.id_lead]))[0].observaciones, booking.descripcion);
+  const [existingLead] = await db.query(
+    "INSERT INTO lead(nombres,correo,id_estado) VALUES($1,$2,(SELECT id_estado FROM estado_lead WHERE codigo='nuevo')) RETURNING id_lead",
+    ['Contacto registrado', 'existing-booking@example.test'],
+  );
+  visitor = '';
+  const existingBooking = {
+    ...booking,
+    clave: randomUUID(),
+    nombres: 'Nombre distinto en el formulario',
+    correo: 'existing-booking@example.test',
+    telefono: '999111446',
+    fechaInicio: remainingSlots.horarios[1],
+  };
+  await call('/captacion/reuniones', 'POST', existingBooking, 201);
+  const [completedLead] = await db.query(`SELECT l.id_lead,l.nombres,l.telefono,a.universidad_otra,p.observaciones
+    FROM reunion r JOIN lead l USING(id_lead) LEFT JOIN perfil_academico a USING(id_lead)
+    LEFT JOIN proyecto_tesis p USING(id_lead) WHERE r.clave_idempotencia=$1`, [existingBooking.clave]);
+  assert.deepEqual(completedLead, {
+    id_lead: existingLead.id_lead,
+    nombres: 'Contacto registrado',
+    telefono: '+51' + existingBooking.telefono,
+    universidad_otra: existingBooking.universidad,
+    observaciones: existingBooking.descripcion,
+  });
   console.log('OK Reserva: lead nuevo con contacto, universidad y consulta; reintento y nueva reserva sin duplicados.');
   if (process.env.R6_UI === '1') {
     const landing = fileURLToPath(
@@ -647,13 +671,14 @@ try {
       () => document.querySelectorAll('#booking-slot option').length > 1,
     );
     await page.locator('#booking-slot').selectOption({ index: 1 });
+    await page.locator('#booking-continue').click();
     await page.locator('#booking-name').fill('Reserva navegador');
     await page.locator('#booking-phone').fill('999111555');
     await page.locator('#booking-email').fill('navegador@example.test');
     await page.locator('#booking-consent').check();
     await page.locator('#live-booking-form button[type=submit]').click();
     await page
-      .getByText(/Tu reunión quedó confirmada/)
+      .getByRole('heading', { name: 'Tu evaluación está agendada' })
       .waitFor({ timeout: 15000 });
     assert.equal(
       (

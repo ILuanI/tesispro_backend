@@ -81,7 +81,8 @@ export class GoogleCalendarService {
   async client(): Promise<{ api: calendar_v3.Calendar; calendarId: string }> {
     const row = await this.connection();
     const calendarId = row?.calendar_id || process.env.GOOGLE_CALENDAR_ID;
-    if (!row || !calendarId) throw new ServiceUnavailableException('El calendario aún no está conectado. Un administrador debe configurar Google Calendar.');
+    if (!row) throw new ServiceUnavailableException('El calendario aún no está conectado. Un administrador debe configurar Google Calendar.');
+    if (!calendarId) throw new ServiceUnavailableException('La agenda aún no está habilitada. Un administrador debe guardar el ID del calendario de citas.');
     const auth = this.oauth();
     try { auth.setCredentials({ refresh_token: decryptCalendarToken(row.refresh_token, this.key()) }); }
     catch { throw new ServiceUnavailableException('No se pudo leer la autorización de Google. Revisa la clave de cifrado.'); }
@@ -89,17 +90,24 @@ export class GoogleCalendarService {
       retryConfig: { retry: 1, httpMethodsToRetry: ['GET', 'HEAD'], statusCodesToRetry: [[429, 429], [500, 599]], totalTimeout: 10000 } }), calendarId };
   }
   async saveCalendar(calendarId: string) {
+    calendarId = calendarId.trim();
+    if (!calendarId || /[\s/:<>]/.test(calendarId)) {
+      throw new BadRequestException('Copia el valor del campo «ID del calendario» en «Integrar calendario».');
+    }
     const row = await this.connection();
     if (!row) throw new BadRequestException('Conecta primero tu cuenta Google.');
-    // Do not redirect pending operations or existing events to a different calendar.
-    const [used] = await this.db.query('SELECT 1 FROM reunion WHERE google_calendar_id IS NOT NULL AND google_calendar_id<>$1 LIMIT 1', [calendarId]);
-    if (used) throw new BadRequestException('Ya hay citas vinculadas a otro calendario. Conserva su calendario de destino.');
     const auth = this.oauth();
     auth.setCredentials({ refresh_token: decryptCalendarToken(row.refresh_token, this.key()) });
     const api = calendar({ version: 'v3', auth });
     const { data } = await api.calendars.get({ calendarId }, { timeout: 8000 });
-    // A secondary calendar owned by this account is required by the events.owned scope.
-    if (calendarId === 'primary' || !data.dataOwner) throw new BadRequestException('Indica el ID del calendario exclusivo Citas Tesispro, no primary.');
+    if (!data.dataOwner && calendarId !== 'primary') {
+      const { data: primary } = await api.calendars.get({ calendarId: 'primary' }, { timeout: 8000 });
+      if (!data.id || data.id !== primary.id) throw new BadRequestException('Selecciona un calendario de la cuenta Google conectada.');
+    }
+    calendarId = data.id || calendarId;
+    // Do not redirect pending operations or existing events to a different calendar.
+    const [used] = await this.db.query('SELECT 1 FROM reunion WHERE google_calendar_id IS NOT NULL AND google_calendar_id<>$1 LIMIT 1', [calendarId]);
+    if (used) throw new BadRequestException('Ya hay citas vinculadas a otro calendario. Conserva su calendario de destino.');
     await api.events.list({ calendarId, maxResults: 1 }, { timeout: 8000 });
     await this.db.query('UPDATE google_calendar_connection SET calendar_id=$1,updated_at=now() WHERE id=1', [calendarId]);
     return { ok: true, name: data.summary, supportsMeet: data.conferenceProperties?.allowedConferenceSolutionTypes?.includes('hangoutsMeet') || false };
