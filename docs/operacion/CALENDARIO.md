@@ -1,14 +1,14 @@
 # Calendario de citas
 
-Las reservas de la landing, recursos y panel usan PostgreSQL y un calendario exclusivo de la cuenta Google autorizada. El visitante no inicia sesión con Google. El panel está en `/admin/reuniones` (Calendario).
+Las reservas de la landing, recursos y panel usan PostgreSQL y el calendario principal o un calendario secundario de la cuenta Google autorizada. El visitante no inicia sesión con Google. El panel está en `/admin/reuniones` (Calendario).
 
 ## Activación
 
 1. Aplicar `pnpm migration:run` contra la base elegida, con respaldo previo. La migración `GoogleCalendar1793200000000` conserva las reuniones anteriores como `sin_vincular`; no envía invitaciones antiguas. En Vercel las migraciones se ejecutan por separado, no al arrancar.
 2. Configurar en el backend `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` y `GOOGLE_TOKEN_ENCRYPTION_KEY`. Generar la última una sola vez con `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`. Guardarla también en el gestor de secretos y conservarla al redesplegar; cambiarla impide descifrar la autorización existente. El refresh token se almacena cifrado con AES-256-GCM en `google_calendar_connection`, nunca en el frontend.
 3. En Google Cloud habilitar Calendar API y configurar audiencia y permisos `calendar.events.owned`, `calendar.freebusy` y `calendar.calendars.readonly`. La URI debe coincidir exactamente con `https://tesispro-backend.vercel.app/integrations/google/callback`. Para desarrollo local registrar además `http://localhost:3000/integrations/google/callback` y usar esa dirección en el entorno local. No hacen falta orígenes JavaScript para este flujo de servidor.
-4. Crear manualmente «Citas Tesispro» en Google Calendar con la cuenta propietaria. Copiar su ID desde Configuración → Integrar calendario.
-5. Abrir el panel como administrador, pulsar **Conectar Google**, autorizar los permisos y regresar al panel. Guardar el ID de «Citas Tesispro» con **Comprobar y guardar**. Alternativamente configurar `GOOGLE_CALENDAR_ID` antes de conectar. `CALENDAR_ADMIN_URL` debe ser la dirección real del panel en el frontend para regresar automáticamente después de OAuth.
+4. Elegir el calendario principal de la cuenta propietaria o crear un calendario secundario «Citas Tesispro». Copiar su ID desde Configuración → Integrar calendario.
+5. Abrir el panel como administrador, pulsar **Conectar Google**, autorizar los permisos y regresar al panel. Guardar el ID del calendario elegido con **Comprobar y guardar**. Alternativamente configurar `GOOGLE_CALENDAR_ID` antes de conectar. `CALENDAR_ADMIN_URL` debe ser la dirección real del panel en el frontend para regresar automáticamente después de OAuth.
 6. Crear una cita con un correo controlado, comprobar el evento, la invitación y Meet; probar reprogramación y cancelación. El panel tiene **Abrir Gmail** para preparar un mensaje y enviarlo manualmente desde tu cuenta.
 
 El `.env` local se preparó a partir del archivo de credenciales entregado; sus valores no están versionados. Los secretos deben configurarse también en Vercel. La autorización de Google y el ID de calendario requieren intervención de la cuenta propietaria. No se necesita comprar un dominio ni asumir que la cuenta es Workspace: se consulta si el calendario admite `hangoutsMeet` y, de lo contrario, se conserva la cita sin Meet. Puede añadirse un enlace de Meet manualmente desde el detalle.
@@ -17,7 +17,7 @@ Si Google Cloud mantiene una aplicación externa en modo de pruebas, los refresh
 
 ## Comportamiento y recuperación
 
-- Nuevas reservas: 30 minutos, lunes a viernes de 09:00 a 18:00, próximos 30 días, `America/Lima`. Solo «Citas Tesispro» bloquea los horarios de Google. Los intervalos externos se comparan por solapamiento, incluyendo eventos de todo el día.
+- Nuevas reservas: 30 minutos, lunes a viernes de 09:00 a 18:00, próximos 30 días, `America/Lima`. Los eventos del calendario configurado bloquean los horarios de Google. Los intervalos externos se comparan por solapamiento, incluyendo eventos de todo el día.
 - La reserva local queda pendiente antes de escribir en Google. El identificador externo deriva del UUID local, evitando crear otro evento al reintentar. Solo se confirma después de persistir la respuesta de Google. Los cupos pendientes se mantienen bloqueados si el resultado remoto es incierto.
 - **Actualizar** recupera operaciones pendientes y refleja cambios o cancelaciones de Google. Procesa hasta 10 citas por pulsación, rotando por antigüedad de revisión. La landing conserva la clave de una solicitud pendiente en sessionStorage y permite comprobarla después de una recarga, con acceso restringido a su cookie de sesión.
 - Las reprogramaciones mantienen el horario anterior y una reserva del nuevo hasta confirmar Google. Las cancelaciones inciertas mantienen el cupo hasta comprobar que el evento fue eliminado. Los errores de ocupación comprobados antes de una escritura liberan la reserva nueva.

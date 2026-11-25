@@ -174,4 +174,4 @@ El repositorio incluye una prueba unitaria del controller raíz y una prueba e2e
 
 El arranque y el endpoint raíz no garantizan que todas las tablas existan ni que todos los flujos CRUD funcionen. El backend conserva los recursos CRUD y añade reglas administrativas de validación, permisos y cobranza. Cada contrato admite un cronograma con cuotas fechadas; los abonos se registran en `pago`, pueden ser parciales y no superan el saldo. Los pagos históricos sin cuota se conservan.
 
-`pnpm run test:admin` verifica migraciones, autenticación, filtros y operaciones financieras por HTTP en un esquema PostgreSQL temporal. `pnpm run admin:create` configura el primer administrador con contraseña oculta. La documentación de endpoints, compatibilidad y operación está en [ADMINISTRACION.md](ADMINISTRACION.md).
+`pnpm run test:admin` verifica migraciones, autenticación, filtros y operaciones financieras por HTTP en un esquema PostgreSQL temporal. `pnpm run admin:create` configura el primer administrador con contraseña oculta. La documentación de endpoints, compatibilidad y operación está en [ADMINISTRACION.md](../operacion/ADMINISTRACION.md).

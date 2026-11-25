@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readPackageMarkdown } from './lib/package-markdown.mjs';
 
-const entries = await readPackageMarkdown(new URL('../../TesisPro_Paquetes_y_Recomendaciones.md', import.meta.url));
+const entries = await readPackageMarkdown(new URL('../../docs/negocio/TesisPro_Paquetes_y_Recomendaciones.md', import.meta.url));
 test('importa los tres paquetes del documento con sus condiciones originales', () => {
   assert.deepEqual(entries.map(e => [e.codigo, e.expectedPrice, e.expectedDays]), [
     ['basico', '299.00', 15], ['desarrollo-tecnico', '799.00', 30], ['integral', '1499.00', 90],

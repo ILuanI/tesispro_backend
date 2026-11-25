@@ -1,4 +1,4 @@
-Despliegue de este backend: [guia de Vercel](./DEPLOY_VERCEL.md).
+Despliegue de este backend: [guia de Vercel](docs/operacion/DEPLOY_VERCEL.md).
 
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
@@ -124,4 +124,14 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
-"# tesispro_backend" 
+"# tesispro_backend"
+
+## Documentación
+
+- [Arquitectura](docs/arquitectura/ARQUITECTURA.md)
+- [Administración](docs/operacion/ADMINISTRACION.md)
+- [Calendario y conexión con Google](docs/operacion/CALENDARIO.md)
+- [Base de conocimiento](docs/funcional/CONOCIMIENTO.md)
+- [Modalidades y cronogramas de pago (R13)](docs/funcional/R13-PAGOS.md)
+- [Registro y verificación de pagos (R14)](docs/funcional/R14-PAGOS.md)
+- [Validación de requerimientos](docs/funcional/VALIDACION-REQUERIMIENTOS.md)

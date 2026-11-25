@@ -1,6 +1,6 @@
 # API del panel administrativo
 
-La guía de instalación y operación está en `../tesispro_frontend/ADMINISTRACION.md`.
+La guía de instalación y operación está en [Administracion del frontend](../../../tesispro_frontend/docs/operacion/ADMINISTRACION.md).
 
 ## Datos y compatibilidad
 
@@ -135,12 +135,12 @@ El backend llama a `R8_AI_URL` (por defecto `http://localhost:4321/api/internal/
 
 ## R13: cronogramas flexibles
 
-Consultar [R13-PAGOS.md](R13-PAGOS.md) para configurar modalidades, aprobar versiones, activar y renegociar cronogramas. Las cuotas y los abonos existentes conservan sus referencias.
+Consultar [R13-PAGOS.md](../funcional/R13-PAGOS.md) para configurar modalidades, aprobar versiones, activar y renegociar cronogramas. Las cuotas y los abonos existentes conservan sus referencias.
 
 
 ## R14: verificacion independiente de pagos
 
-Consultar [R14-PAGOS.md](R14-PAGOS.md). El asesor comercial registra pagos pendientes y el administrador los verifica. El registro ya no confirma automaticamente un abono.
+Consultar [R14-PAGOS.md](../funcional/R14-PAGOS.md). El asesor comercial registra pagos pendientes y el administrador los verifica. El registro ya no confirma automaticamente un abono.
 
 ## Carga inicial del CRM
 

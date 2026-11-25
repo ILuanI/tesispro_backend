@@ -5,7 +5,7 @@ import { ExistingPackagesStore } from '../dist/modules/admin/existing-packages.s
 
 // Por defecto solo muestra el plan. --apply crea versiones sin reescribir el historial.
 const apply = process.argv.includes('--apply');
-const entries = await readPackageMarkdown(fileURLToPath(new URL('../../TesisPro_Paquetes_y_Recomendaciones.md', import.meta.url)));
+const entries = await readPackageMarkdown(fileURLToPath(new URL('../../docs/negocio/TesisPro_Paquetes_y_Recomendaciones.md', import.meta.url)));
 await ds.initialize();
 try {
   const store = new ExistingPackagesStore(ds);
