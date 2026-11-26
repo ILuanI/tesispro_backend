@@ -616,9 +616,25 @@ export class AdminService {
     const [seguimiento] = await this.db.query(
       "SELECT count(DISTINCT id_lead) FILTER(WHERE fecha_programada<now())::int AS vencidos,count(DISTINCT id_lead) FILTER(WHERE fecha_programada>=now())::int AS proximos FROM seguimiento WHERE estado='programado'",
     );
+    // Series for the overview charts (Lima calendar): new leads per day and net confirmed collections per month.
+    const leadsPorDia = await this.db.query(
+      `SELECT d::date::text AS fecha,count(l.id_lead)::int AS total
+       FROM generate_series((now() AT TIME ZONE 'America/Lima')::date-29,(now() AT TIME ZONE 'America/Lima')::date,interval '1 day') d
+       LEFT JOIN lead l ON (l.fecha_registro AT TIME ZONE 'America/Lima')::date=d::date
+       GROUP BY d ORDER BY d`,
+    );
+    const cobrosPorMes = await this.db.query(
+      `SELECT to_char(m,'YYYY-MM') AS mes,x.moneda,coalesce(sum(p.monto),0)::numeric(12,2)::text AS monto
+       FROM generate_series(date_trunc('month',now() AT TIME ZONE 'America/Lima')-interval '5 months',date_trunc('month',now() AT TIME ZONE 'America/Lima'),interval '1 month') m
+       CROSS JOIN (SELECT DISTINCT moneda FROM pago_neto WHERE estado='confirmado') x
+       LEFT JOIN pago_neto p ON p.estado='confirmado' AND p.moneda=x.moneda AND date_trunc('month',p.fecha_pago AT TIME ZONE 'America/Lima')=m
+       GROUP BY m,x.moneda ORDER BY x.moneda,m`,
+    );
     return {
       origenes,
       seguimiento,
+      leadsPorDia,
+      cobrosPorMes,
       leads: leads[0],
       estados: map(estados),
       monedas: map(monedas),
