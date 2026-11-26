@@ -14,6 +14,8 @@
     "test:agents:browser": "pnpm build && node scripts/test-agents.mjs --browser",
     "seed": "pnpm build && node scripts/seed.mjs",
     "test:seed": "pnpm build && node scripts/test-seed.mjs",
+    "seed:modules": "pnpm build && node scripts/seed-modules.mjs",
+    "test:seed-modules": "pnpm build && node scripts/test-seed-modules.mjs",
     "test:packages": "pnpm build && node scripts/test-packages.mjs",
     "test:packages:browser": "pnpm build && node scripts/test-packages.mjs --browser",
     "test:referrals": "pnpm build && node scripts/test-referrals.mjs",
