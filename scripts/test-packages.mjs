@@ -744,9 +744,9 @@ try {
             .getByRole('button', { name: 'Crear paquete', exact: true })
             .click();
           let dialog = page.getByRole('dialog');
-          await dialog.getByLabel('Código *', { exact: true }).fill('UI_R11');
+          await dialog.getByLabel('Código', { exact: true }).fill('UI_R11');
           await dialog
-            .getByLabel('Nombre *', { exact: true })
+            .getByLabel('Nombre', { exact: true })
             .fill('Paquete UI de prueba');
           await dialog
             .getByLabel('Descripción', { exact: true })
@@ -780,11 +780,7 @@ try {
               exact: true,
             })
             .click();
-          await page
-            .getByRole('dialog')
-            .getByRole('button', { name: 'Confirmar estado' })
-            .click();
-          await ui(page.getByRole('dialog')).toHaveCount(0);
+          await ui(page.getByRole('button', { name: 'Desactivar Paquete UI de prueba', exact: true })).toBeVisible();
           await page
             .getByRole('button', {
               name: 'Editar Paquete UI de prueba',
@@ -830,7 +826,7 @@ try {
             .fill('UI_R11');
           await ui(
             page
-              .getByRole('table')
+              .getByRole('list')
               .getByText('Futuro de prueba', { exact: true }),
           ).toHaveCount(0);
           await page.screenshot({
@@ -898,11 +894,7 @@ try {
               exact: true,
             })
             .click();
-          await page
-            .getByRole('dialog')
-            .getByRole('button', { name: 'Confirmar estado' })
-            .click();
-          await ui(page.getByRole('dialog')).toHaveCount(0);
+          await ui(page.getByRole('button', { name: 'Activar Paquete UI de prueba', exact: true })).toBeVisible();
           assert.deepEqual(errors, []);
           await writeFile(
             resolve(output, 'consola.json'),
