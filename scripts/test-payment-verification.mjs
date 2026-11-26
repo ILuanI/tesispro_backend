@@ -723,6 +723,37 @@ try {
       assert.ok(summary.monedas.some((m) => m.moneda === 'PEN'));
     },
   );
+  await check(
+    'efectivo sin comprobante, confirmación rápida y autoconfirmación del administrador',
+    async () => {
+      const k = await contract('600.00'),
+        quota = (await schedule(k, ['600.00'])).cuotas[0].idCuota;
+      const cash = (amount) => ({ ...payment(amount), metodo: 'efectivo' });
+      // Cash without a receipt is not an incidence; a clean confirmation needs no reason.
+      const sales = (await http(`/admin/cuotas/${quota}/abonos`, 'POST', cash('100.00'), 201, 'sales')).data;
+      assert.equal(sales.estado, 'pendiente');
+      assert.equal(sales.evidenciaIncompleta, false);
+      await http(`/admin/pagos/${sales.idPago}/decision`, 'POST', decision('rechazado', ''), 400);
+      const quick = (await http(`/admin/pagos/${sales.idPago}/decision`, 'POST', decision('confirmado', ''), 201)).data;
+      assert.equal(quick.estado, 'confirmado');
+      assert.equal(quick.motivoDecision, 'Verificado sin observaciones.');
+      // A digital payment without a receipt still needs an explanation to be confirmed.
+      const digital = (await http(`/admin/cuotas/${quota}/abonos`, 'POST', payment('50.00'), 201, 'sales')).data;
+      assert.equal(digital.evidenciaIncompleta, true);
+      await http(`/admin/pagos/${digital.idPago}/decision`, 'POST', decision('confirmado', ''), 409);
+      // A clean payment registered by an administrator is confirmed on save, idempotently.
+      const body = cash('150.00');
+      const own = (await http(`/admin/cuotas/${quota}/abonos`, 'POST', body, 201)).data;
+      assert.equal(own.estado, 'confirmado');
+      assert.equal(own.motivoDecision, 'Registrado y verificado por el administrador.');
+      const replay = (await http(`/admin/cuotas/${quota}/abonos`, 'POST', body, 201)).data;
+      assert.equal(replay.idPago, own.idPago);
+      assert.equal(replay.estado, 'confirmado');
+      // With an incidence (digital without receipt) the administrator's own payment stays pending.
+      const ownDigital = (await http(`/admin/cuotas/${quota}/abonos`, 'POST', payment('10.00'), 201)).data;
+      assert.equal(ownDigital.estado, 'pendiente');
+    },
+  );
   if (process.argv.includes('--browser')) {
     await check(
       'navegador 4321: asesor registra; administrador confirma; recarga conserva saldo',
@@ -755,21 +786,23 @@ try {
         const fixture = await contract(),
           scheduled = await schedule(fixture),
           quota = scheduled.cuotas[0].idCuota;
+        const [{ correo }] = await db.query('SELECT correo FROM lead WHERE id_lead=$1', [fixture.id_lead]);
         await page.goto(origin + '/admin/pagos');
-        await page
-          .getByLabel('Titular del contrato')
-          .selectOption(fixture.id_lead);
-        await page
+        await page.getByRole('button', { name: 'Registrar abono', exact: true }).click();
+        const form = page.getByRole('dialog');
+        await form.getByLabel('Titular del contrato').fill(correo);
+        await form.getByRole('button', { name: new RegExp(correo) }).click();
+        await form
           .getByLabel('Contrato', { exact: true })
           .selectOption(String(fixture.id_contrato));
-        await page
+        await form
           .getByLabel('Cuota', { exact: true })
           .selectOption(String(quota));
-        await page.getByLabel('Importe del abono').fill('200.00');
-        await page
+        await form.getByLabel('Importe del abono').fill('200.00');
+        await form
           .getByLabel('Fecha y hora del pago (Lima)')
           .fill('2026-11-01T10:00');
-        await page
+        await form
           .getByLabel('Método de pago', { exact: true })
           .selectOption('yape');
         await Promise.all([
@@ -779,7 +812,7 @@ try {
               r.request().method() === 'POST' &&
               r.status() === 201,
           ),
-          page
+          form
             .getByRole('button', {
               name: 'Registrar pendiente de verificación',
             })
@@ -791,6 +824,7 @@ try {
         );
         role = 'admin';
         await page.goto(origin + '/admin/pagos');
+        await page.getByLabel('Buscar pagos').fill(String(p.id_pago));
         await page
           .getByRole('button', {
             name: `Revisar pago #${p.id_pago}`,
@@ -809,9 +843,10 @@ try {
             .click(),
         ]);
         await page.reload();
-        await page.getByLabel('Verificación',{exact:true}).selectOption('confirmado');
+        await page.getByRole('button', { name: 'Confirmados', exact: true }).click();
+        await page.getByLabel('Buscar pagos').fill(String(p.id_pago));
         await page.getByRole('button',{name:`Revisar pago #${p.id_pago}`,exact:true}).click();
-        await page.getByRole('dialog').getByText(/Confirmado.*Aplicado/).waitFor();
+        await page.getByRole('dialog').getByText(/Aplicado S\/\s200\.00/).first().waitFor();
         assert.equal(
           (await http(`/admin/contratos/${fixture.id_contrato}/cronograma`))
             .data.cuotas[0].saldo,

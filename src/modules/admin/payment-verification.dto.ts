@@ -12,7 +12,8 @@ import {
 } from 'class-validator';
 export class PaymentDecisionDto {
   @IsIn(['confirmado', 'rechazado']) estado: 'confirmado' | 'rechazado';
-  @IsString() @MinLength(1) @MaxLength(3000) motivo: string;
+  /** Required to reject or to confirm a payment with incidences; optional for clean confirmations. */
+  @IsOptional() @IsString() @MaxLength(3000) motivo = '';
   @IsUUID() claveIdempotencia: string;
 }
 export class RectificationDto {

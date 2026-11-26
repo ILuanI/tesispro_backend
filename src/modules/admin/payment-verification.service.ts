@@ -51,9 +51,16 @@ export function paymentUpload(file: PaymentUpload) {
     huella: createHash('sha256').update(b).digest('hex'),
   };
 }
+const CLEAN_CONFIRMATION = 'Verificado sin observaciones.';
+const ADMIN_CONFIRMATION = 'Registrado y verificado por el administrador.';
+/** Deterministic UUID so a retried registration replays the same automatic decision. */
+const derivedKey = (key: string, scope: string) => {
+  const h = createHash('sha256').update(`${scope}:${key}`).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+};
 const paymentsSql = `SELECT p.*,u.nombres AS registrador,v.nombres AS verificador,
   coalesce((SELECT sum(monto) FROM pago_neto WHERE id_pago=p.id_pago AND estado='confirmado'),0)::numeric(10,2)::text AS aplicado,
-  (NOT EXISTS(SELECT 1 FROM pago_comprobante WHERE id_pago=p.id_pago) AND coalesce(p.comprobante_url,'')='') AS evidencia_incompleta,
+  (coalesce(p.metodo::text,'')<>'efectivo' AND NOT EXISTS(SELECT 1 FROM pago_comprobante WHERE id_pago=p.id_pago) AND coalesce(p.comprobante_url,'')='') AS evidencia_incompleta,
   EXISTS(SELECT 1 FROM pago p2 WHERE p2.id_pago<>p.id_pago AND p2.estado<>'rechazado' AND nullif(trim(p.referencia_operacion),'') IS NOT NULL AND lower(trim(p2.referencia_operacion))=lower(trim(p.referencia_operacion)) AND p2.metodo=p.metodo AND p2.moneda=p.moneda AND p2.monto=p.monto AND (p2.fecha_pago AT TIME ZONE 'America/Lima')::date=(p.fecha_pago AT TIME ZONE 'America/Lima')::date) AS posible_duplicado,
   (p.estado='pendiente' AND p.monto>coalesce(q.monto-(SELECT coalesce(sum(n.monto),0) FROM pago_neto n WHERE n.id_cuota=p.id_cuota AND n.estado='confirmado'),pr.monto_total-(SELECT coalesce(sum(n.monto),0) FROM pago_neto n WHERE n.id_contrato=p.id_contrato AND n.estado='confirmado'))) AS excedente,
   c.id_lead AS titular, l.nombres,l.apellidos,l.correo,l.telefono
@@ -286,7 +293,29 @@ export class PaymentVerificationService {
       if (file) await this.appendFile(m, p.id_pago, user, file);
       return p.id_pago;
     });
-    const d = await this.detail(result);
+    let d = await this.detail(result);
+    // An administrator is the verifier: a clean payment they register is confirmed right away.
+    const [author] = await this.db.query(
+      'SELECT rol FROM usuario_interno WHERE id_usuario=$1',
+      [user],
+    );
+    if (
+      author?.rol === 'administrador' &&
+      (d.estado === 'pendiente' ||
+        (d.estado === 'confirmado' && d.motivoDecision === ADMIN_CONFIRMATION)) &&
+      !d.excedente &&
+      !d.posibleDuplicado &&
+      !d.evidenciaIncompleta
+    )
+      d = await this.decide(
+        result,
+        {
+          estado: 'confirmado',
+          motivo: ADMIN_CONFIRMATION,
+          claveIdempotencia: derivedKey(dto.claveIdempotencia, 'auto-confirmacion'),
+        },
+        user,
+      );
     return {
       ...d,
       incidencias: [
@@ -354,8 +383,9 @@ export class PaymentVerificationService {
     return this.detail(id);
   }
   async decide(id: number, dto: PaymentDecisionDto, user: number) {
-    if (!dto.motivo.trim())
-      throw new BadRequestException('Fundamenta la decisión.');
+    let motivo = (dto.motivo ?? '').trim();
+    if (dto.estado === 'rechazado' && !motivo)
+      throw new BadRequestException('Explica por qué rechazas el abono.');
     const result = await this.db.transaction(async (m) => {
       await this.role(m, user, 'administrador');
       const [ref] = await m.query(
@@ -379,7 +409,8 @@ export class PaymentVerificationService {
         if (
           p.clave_decision === dto.claveIdempotencia &&
           p.estado === dto.estado &&
-          p.motivo_decision === dto.motivo.trim() &&
+          (p.motivo_decision === motivo ||
+            (!motivo && p.motivo_decision === CLEAN_CONFIRMATION)) &&
           p.id_verificador === user
         )
           return {};
@@ -426,7 +457,7 @@ export class PaymentVerificationService {
         // A matching reference requires an explicit explanation of distinct operations.
         if (
           live.posible_duplicado &&
-          !/operaciones distintas:/i.test(dto.motivo)
+          !/operaciones distintas:/i.test(motivo)
         ) {
           await this.event(m, id, user, 'incidencia', {
             tipo: 'posible_duplicado',
@@ -436,6 +467,13 @@ export class PaymentVerificationService {
               'Posible duplicado. Recházalo o documenta «Operaciones distintas:» con la evidencia de conciliación.',
           };
         }
+        // Without a receipt (non-cash) the confirmation must explain the external check.
+        if (live.evidencia_incompleta && !motivo)
+          return {
+            conflicto:
+              'El abono no tiene comprobante. Explica cómo verificaste el pago para confirmarlo.',
+          };
+        if (!motivo) motivo = CLEAN_CONFIRMATION;
       }
       await m.query(
         "SELECT set_config('app.admin_usuario',$1,true),set_config('app.admin_motivo',$2,true)",
@@ -443,7 +481,7 @@ export class PaymentVerificationService {
       );
       await m.query(
         'UPDATE pago SET estado=$2,id_verificador=$3,verificado_en=now(),motivo_decision=$4,clave_decision=$5 WHERE id_pago=$1',
-        [id, dto.estado, user, dto.motivo.trim(), dto.claveIdempotencia],
+        [id, dto.estado, user, motivo, dto.claveIdempotencia],
       );
       return {};
     });
