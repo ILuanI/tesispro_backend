@@ -28,6 +28,7 @@ import { ResourceJourneys1792400000000 } from '../dist/migrations/1792400000000-
 import { Referrals1792500000000 } from '../dist/migrations/1792500000000-Referrals.js';
 import { LeadProfiling1792500000000 } from '../dist/migrations/1792500000000-LeadProfiling.js';
 import { TesiQualification1792600000000 } from '../dist/migrations/1792600000000-TesiQualification.js';
+import { ResourceLinkChannelOnly1793400000000 } from '../dist/migrations/1793400000000-ResourceLinkChannelOnly.js';
 import { EnlaceReferidoModule } from '../dist/modules/leads/enlace-referido/enlace-referido.module.js';
 
 const schema = `r4_test_${randomBytes(8).toString('hex')}`;
@@ -76,6 +77,7 @@ try {
       ResourceJourneys1792400000000,
       LeadProfiling1792500000000,
       TesiQualification1792600000000,
+      ResourceLinkChannelOnly1793400000000,
       Referrals1792500000000,
     ],
   };
@@ -366,7 +368,7 @@ try {
       const link = await expect(
         `/admin/recursos/${resourceId}/enlaces`,
         'POST',
-        { canal: 'facebook', medio: 'social', campana: 'R4' },
+        { canal: 'facebook' },
         201,
       );
       const redirect = await fetch(base + '/r/' + link.codigo, {

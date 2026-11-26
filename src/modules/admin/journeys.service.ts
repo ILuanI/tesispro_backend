@@ -11,10 +11,10 @@ import { DataSource, type EntityManager } from 'typeorm';
 import {
   AttributionDto,
   BookMeetingDto,
-  CampaignLinkDto,
   JourneyListDto,
   MeetingListDto,
   ResourceContactDto,
+  ResourceLinkDto,
 } from './journeys.dto.js';
 import { journeyConditions } from './journey-filters.js';
 import { ReferralsService } from './referrals.service.js';
@@ -69,12 +69,12 @@ export class JourneysService {
       )
       .then((rows) => rows.map(camel));
   }
-  async createLink(id: number, dto: CampaignLinkDto) {
+  async createLink(id: number, dto: ResourceLinkDto) {
     await this.publicResource(id);
     const codigo = randomBytes(12).toString('hex');
     const [row] = await this.db.query(
-      'INSERT INTO enlace_recurso(codigo,id_recurso,canal,medio,campana,publicacion) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-      [codigo, id, dto.canal, dto.medio, dto.campana, dto.publicacion || null],
+      'INSERT INTO enlace_recurso(codigo,id_recurso,canal) VALUES($1,$2,$3) RETURNING *',
+      [codigo, id, dto.canal],
     );
     return { ...camel(row), path: `/r/${codigo}` };
   }
@@ -103,9 +103,6 @@ export class JourneysService {
       recurso: link.id_recurso,
       enlace: code,
       utm_source: link.canal,
-      utm_medium: link.medio,
-      utm_campaign: link.campana,
-      utm_content: link.publicacion,
     }))
       if (value !== null) url.searchParams.set(key, String(value));
     return url.toString();
@@ -117,10 +114,7 @@ export class JourneysService {
       const link = dto.enlace ? await this.link(dto.enlace, m) : null;
       if (link && link.id_recurso !== id)
         throw new BadRequestException('El enlace no corresponde al recurso.');
-      const canal = link?.canal || dto.canal || 'directo',
-        medio = link?.medio || dto.medio || null,
-        campana = link?.campana || dto.campana || null,
-        publicacion = link?.publicacion || dto.publicacion || null;
+      const canal = link?.canal || dto.canal || 'directo';
       const source = [
         'facebook',
         'instagram',
@@ -140,12 +134,12 @@ export class JourneysService {
           ? canal
           : 'otro';
       const [session] = await m.query(
-        'INSERT INTO sesion_landing(canal_origen,id_recurso,utm_source,utm_medium,visito_formulario) VALUES($1,$2,$3,$4,true) RETURNING id_sesion',
-        [source, id, canal, medio],
+        'INSERT INTO sesion_landing(canal_origen,id_recurso,utm_source,visito_formulario) VALUES($1,$2,$3,true) RETURNING id_sesion',
+        [source, id, canal],
       );
       const requestId = randomUUID();
       await m.query(
-        `INSERT INTO solicitud_recurso(id_solicitud,token_hash,id_recurso,titulo,formato,codigo_enlace,id_sesion,canal,medio,campana,publicacion) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        `INSERT INTO solicitud_recurso(id_solicitud,token_hash,id_recurso,titulo,formato,codigo_enlace,id_sesion,canal) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           requestId,
           digest(token),
@@ -155,9 +149,6 @@ export class JourneysService {
           link?.codigo || null,
           session.id_sesion,
           canal,
-          medio,
-          campana,
-          publicacion,
         ],
       );
       await this.event(m, requestId, 'llegada');
@@ -500,7 +491,7 @@ export class JourneysService {
         values,
       );
       const rows = await m.query(
-        `SELECT s.id_solicitud,s.id_recurso,s.titulo,s.formato,s.id_buyer,s.id_lead,s.nombres,s.telefono,s.canal,s.medio,s.campana,s.publicacion,s.created_at,s.formulario_completado,
+        `SELECT s.id_solicitud,s.id_recurso,s.titulo,s.formato,s.id_buyer,s.id_lead,s.nombres,s.telefono,s.canal,s.created_at,s.formulario_completado,
         (SELECT json_agg(json_build_object('tipo',ev.tipo,'fecha',ev.fecha) ORDER BY ev.fecha,ev.id_evento) FROM evento_recurso ev WHERE ev.id_solicitud=s.id_solicitud) AS eventos,
         (SELECT re.estado FROM reunion re WHERE re.id_solicitud=s.id_solicitud ORDER BY (re.estado='confirmada') DESC,re.created_at DESC LIMIT 1) AS reunion_estado
         FROM solicitud_recurso s ${where} ORDER BY s.created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
@@ -518,7 +509,7 @@ export class JourneysService {
     if (dto.desde && dto.hasta && dto.desde > dto.hasta)
       throw new BadRequestException('Rango de fechas inválido.');
     const values: unknown[] = [],
-      clauses = journeyConditions({ ...dto, procedencia: undefined, campana: undefined, actividadDesde: undefined, actividadHasta: undefined, reunion: undefined }, values);
+      clauses = journeyConditions({ ...dto, procedencia: undefined, actividadDesde: undefined, actividadHasta: undefined, reunion: undefined }, values);
     const add = (sql: string, v: unknown) => {
       values.push(v);
       clauses.push(sql.replaceAll('?', `$${values.length}`));
@@ -526,7 +517,6 @@ export class JourneysService {
     if (dto.actividadDesde && dto.actividadHasta && dto.actividadDesde > dto.actividadHasta)
       throw new BadRequestException('Rango de actividad inválido.');
     if (dto.procedencia) add("coalesce(s.canal,sl.utm_source,sl.canal_origen::text)=?", dto.procedencia);
-    if (dto.campana) add("coalesce(s.campana,sl.campana_origen,'') ILIKE ?", `%${dto.campana.replace(/[\\%_]/g, '\\$&')}%`);
     if (dto.actividadDesde) add("coalesce(s.created_at,r.created_at)>=(?::date::timestamp AT TIME ZONE 'America/Lima')",dto.actividadDesde);
     if (dto.actividadHasta) add("coalesce(s.created_at,r.created_at)<((?::date+1)::timestamp AT TIME ZONE 'America/Lima')",dto.actividadHasta);
     if (dto.reunion === 'confirmada' || dto.reunion === 'cancelada') add('r.estado=?',dto.reunion);
@@ -553,7 +543,7 @@ export class JourneysService {
       values,
     );
     const rows = await this.db.query(
-      `SELECT r.*,s.titulo AS recurso,coalesce(s.canal,sl.utm_source,sl.canal_origen::text) AS canal,coalesce(s.campana,sl.campana_origen) AS campana ${from} ORDER BY r.fecha_inicio DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT r.*,s.titulo AS recurso,coalesce(s.canal,sl.utm_source,sl.canal_origen::text) AS canal ${from} ORDER BY r.fecha_inicio DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, dto.pageSize, (dto.page - 1) * dto.pageSize],
     );
     return {

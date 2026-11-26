@@ -40,7 +40,7 @@ const fields = {
 export const timelineSql = `
  SELECT 'perfil:'||ep.id_evento AS referencia,ep.tipo,ep.fecha,ep.origen, jsonb_build_object('antes',ep.antes,'despues',ep.despues,'autor',nullif(concat_ws(' ',u.nombres,u.apellidos),'')) AS detalle FROM evento_perfil ep LEFT JOIN usuario_interno u ON u.id_usuario=ep.id_usuario WHERE ep.id_lead=$1
  UNION ALL SELECT 'estado:'||h.id_historial,'cambio_estado',h.fecha,'administracion',jsonb_build_object('estado',e.nombre,'motivo',h.motivo,'idUsuario',h.id_usuario) FROM lead_estado_historial h JOIN estado_lead e USING(id_estado) WHERE h.id_lead=$1
- UNION ALL SELECT 'recurso:'||ev.id_evento,ev.tipo,ev.fecha,'recursos',jsonb_build_object('titulo',s.titulo,'canal',s.canal,'campana',s.campana) FROM evento_recurso ev JOIN solicitud_recurso s USING(id_solicitud) WHERE s.id_lead=$1
+ UNION ALL SELECT 'recurso:'||ev.id_evento,ev.tipo,ev.fecha,'recursos',jsonb_build_object('titulo',s.titulo,'canal',s.canal) FROM evento_recurso ev JOIN solicitud_recurso s USING(id_solicitud) WHERE s.id_lead=$1
  UNION ALL SELECT 'descarga:'||d.id_descarga,'descarga_historica',d.fecha,'recursos',jsonb_build_object('titulo',r.titulo,'entregado',d.entregado) FROM descarga_recurso d JOIN recurso_gratuito r USING(id_recurso) WHERE d.id_lead=$1
  AND NOT EXISTS(SELECT 1 FROM solicitud_recurso s WHERE s.id_lead=d.id_lead AND s.id_recurso=d.id_recurso AND s.id_sesion=d.id_sesion)
  UNION ALL SELECT 'mensaje:'||m.id_mensaje,'mensaje',m.enviado_en,'tesi',jsonb_build_object('idConversacion',m.id_conversacion,'remitente',m.remitente,'contenido',m.contenido) FROM mensaje m JOIN conversacion c USING(id_conversacion) WHERE c.id_lead=$1

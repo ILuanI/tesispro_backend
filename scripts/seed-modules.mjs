@@ -156,9 +156,8 @@ export async function seedModules(db) {
 
     const resources = await m.query('SELECT id_recurso FROM recurso_gratuito WHERE activo ORDER BY id_recurso LIMIT 4');
     for (const [i, r] of resources.entries()) {
-      for (const [j, [canal, medio]] of [['instagram', 'organico'], ['facebook', 'anuncio']].entries()) {
-        await insert('enlace_recurso', { codigo: randomBytes(12).toString('hex'), id_recurso: r.id_recurso, canal, medio,
-          campana: ['Tesis con rumbo', 'Avanza tu investigación', 'Preparación de sustentación'][(i + j) % 3], publicacion: posts[(i * 2 + j) % 6][1].slice(0, 100), clics: 40 + i * 17 + j * 9 });
+      for (const [j, canal] of ['instagram', 'facebook'].entries()) {
+        await insert('enlace_recurso', { codigo: randomBytes(12).toString('hex'), id_recurso: r.id_recurso, canal, clics: 40 + i * 17 + j * 9 });
         result.enlacesRecurso = (result.enlacesRecurso ?? 0) + 1;
       }
     }

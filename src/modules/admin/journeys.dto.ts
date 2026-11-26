@@ -19,19 +19,9 @@ const trim = ({ value }: { value: unknown }) =>
 export class AttributionDto {
   @IsOptional() @IsString() @Matches(/^[a-f0-9]{24}$/) enlace?: string;
   @IsOptional() @IsIn(buyerChannels) canal?: string;
-  @IsOptional() @IsString() @MaxLength(100) medio?: string;
-  @IsOptional() @IsString() @MaxLength(100) campana?: string;
-  @IsOptional() @IsString() @MaxLength(100) publicacion?: string;
 }
-export class CampaignLinkDto {
+export class ResourceLinkDto {
   @IsIn(buyerChannels) canal: string;
-  @Transform(trim) @IsString() @MinLength(1) @MaxLength(100) medio: string;
-  @Transform(trim) @IsString() @MinLength(1) @MaxLength(100) campana: string;
-  @IsOptional()
-  @Transform(trim)
-  @IsString()
-  @MaxLength(100)
-  publicacion?: string;
 }
 export class ResourceContactDto {
   @Transform(trim) @IsString() @MinLength(1) @MaxLength(100) nombres: string;
@@ -64,7 +54,6 @@ export class JourneyFilterDto {
   @Max(2147483647)
   recurso?: number;
   @IsOptional() @IsIn(buyerChannels) procedencia?: string;
-  @IsOptional() @IsString() @MaxLength(100) campana?: string;
   @IsOptional()
   @IsIn(['sin_accion', 'solicitada', 'entregada', 'externo'])
   descarga?: string;

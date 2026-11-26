@@ -24,7 +24,7 @@ import {
   AttributionDto,
   AvailabilityDto,
   BookMeetingDto,
-  CampaignLinkDto,
+  ResourceLinkDto,
   CancelMeetingDto,
   JourneyListDto,
   MeetingListDto,
@@ -152,7 +152,7 @@ export class JourneysAdminController {
   }
   @Post('recursos/:id/enlaces') createLink(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: CampaignLinkDto,
+    @Body() dto: ResourceLinkDto,
   ) {
     return this.service.createLink(id, dto);
   }

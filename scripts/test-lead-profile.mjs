@@ -130,7 +130,6 @@ try {
     nombres: 'No reemplazar',
     consentimiento: true,
     canal: 'facebook',
-    campana: 'R6',
   };
   await call('/captacion/perfiles', 'POST', capture, 201);
   await call('/captacion/perfiles', 'POST', capture, 201);

@@ -148,18 +148,13 @@ try {
     );
   });
   await check(
-    'Enlaces por red conservan la campaña y evitan atribución adulterada',
+    'Enlaces por red solo registran el canal y evitan atribución adulterada',
     async () => {
       for (const canal of ['facebook', 'instagram', 'tiktok']) {
         const l = await expect(
           `/admin/recursos/${id}/enlaces`,
           'POST',
-          {
-            canal,
-            medio: 'social',
-            campana: 'tesis_2026',
-            publicacion: `post_${canal}`,
-          },
+          { canal },
           201,
         );
         if (canal === 'facebook') link = l;
@@ -168,18 +163,19 @@ try {
         const url = new URL(r.headers.get('location'));
         assert.equal(url.searchParams.get('utm_source'), canal);
         assert.equal(url.searchParams.get('recurso'), String(id));
+        for (const extra of ['utm_medium', 'utm_campaign', 'utm_content'])
+          assert.equal(url.searchParams.has(extra), false);
         const { token } = await expect(
           `${pub}/${id}/visitas`,
           'POST',
-          { enlace: l.codigo, canal: 'otro', campana: 'falsa' },
+          { enlace: l.codigo, canal: 'otro' },
           201,
         );
         const [row] = await db.query(
-          "SELECT canal,campana FROM solicitud_recurso WHERE token_hash=encode(sha256($1::bytea),'hex')",
+          "SELECT canal FROM solicitud_recurso WHERE token_hash=encode(sha256($1::bytea),'hex')",
           [Buffer.from(token)],
         );
         assert.equal(row.canal, canal);
-        assert.equal(row.campana, 'tesis_2026');
       }
     },
   );
@@ -216,7 +212,7 @@ try {
           await expect(
             '/admin/buyers?descarga=sin_accion&recurso=' +
               id +
-              '&campana=tesis_2026',
+              '&procedencia=facebook',
           )
         ).total,
         1,
@@ -267,10 +263,7 @@ try {
   await check(
     'Clic en agendar convierte sin correo y conserva solicitudes sucesivas',
     async () => {
-      meetingToken = await visit({
-        canal: 'instagram',
-        campana: 'otra_campana',
-      });
+      meetingToken = await visit({ canal: 'instagram' });
       await contact(meetingToken, '999111002');
       const response = await expect(
         `${pub}/agendar`,
@@ -377,7 +370,7 @@ try {
       assert.equal(
         (
           await expect(
-            '/admin/reuniones?estado=confirmada&campana=otra_campana',
+            '/admin/reuniones?estado=confirmada&procedencia=instagram',
           )
         ).total,
         1,
@@ -703,14 +696,16 @@ try {
           .getByRole('button', { name: 'Enlaces', exact: true })
           .click();
         const dialog = page.getByRole('dialog');
+        const newLink = dialog.getByRole('button', { name: 'Nuevo enlace' });
+        if (await newLink.isVisible()) await newLink.click();
         await dialog
-          .getByLabel('Campaña *', { exact: true })
-          .fill('campana_desde_panel');
+          .getByLabel('Red social o canal', { exact: true })
+          .selectOption('tiktok');
         await dialog
-          .getByRole('button', { name: 'Generar enlace', exact: true })
+          .getByRole('button', { name: 'Crear y copiar enlace', exact: true })
           .click();
         await ui(
-          dialog.getByLabel('Enlace campana_desde_panel', { exact: true }),
+          dialog.getByRole('button', { name: /^Copiar enlace Tiktok / }).first(),
         ).toBeVisible();
         await dialog.press('Escape');
         await card

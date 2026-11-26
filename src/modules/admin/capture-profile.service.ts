@@ -71,8 +71,8 @@ export class CaptureProfileService {
         ? channel
         : 'otro';
     const [s] = await m.query(
-      'INSERT INTO sesion_landing(canal_origen,utm_source,utm_medium,campana_origen) VALUES($1,$2,$3,$4) RETURNING id_sesion',
-      [source, channel, attribution.medio || null, attribution.campana || null],
+      'INSERT INTO sesion_landing(canal_origen,utm_source) VALUES($1,$2) RETURNING id_sesion',
+      [source, channel],
     );
     const [access] = await m.query(
       'INSERT INTO acceso_contacto(token_hash,id_sesion) VALUES($1,$2) RETURNING *',

@@ -19,11 +19,6 @@ export function journeyConditions(
     throw new BadRequestException('Rango de actividad inválido.');
   if (dto.recurso) add(`${alias}.id_recurso=?`, dto.recurso);
   if (dto.procedencia) add(`${alias}.canal=?`, dto.procedencia);
-  if (dto.campana)
-    add(
-      `${alias}.campana ILIKE ?`,
-      `%${dto.campana.replace(/[\\%_]/g, '\\$&')}%`,
-    );
   if (dto.actividadDesde)
     add(
       `${alias}.created_at >= (?::date::timestamp AT TIME ZONE 'America/Lima')`,

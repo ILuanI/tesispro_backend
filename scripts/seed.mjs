@@ -205,7 +205,7 @@ export async function seed(db) {
         leadIds.push(lead.idLead);
         result.leads++;
       }
-      const { token } = await journeys.visit(resourceIds[i % 4], { canal: channels[i % 6], medio: i % 3 ? 'organico' : 'anuncio', campana: ['Tesis con rumbo', 'Avanza tu investigación', 'Preparación de sustentación'][i % 3] });
+      const { token } = await journeys.visit(resourceIds[i % 4], { canal: channels[i % 6] });
       await journeys.contact(token, { nombres: `${nombres} ${apellidos}`, telefono });
       await journeys.options(token);
       if (i % 5 !== 4) {
@@ -215,7 +215,7 @@ export async function seed(db) {
       }
       const [request] = await m.query('SELECT * FROM solicitud_recurso WHERE token_hash=$1', [createHash('sha256').update(token).digest('hex')]);
       await m.query('UPDATE solicitud_recurso SET created_at=$2,formulario_completado=$2 WHERE id_solicitud=$1', [request.id_solicitud, at(-28 + i % 24)]);
-      await m.query('UPDATE sesion_landing SET fecha=$2,campana_origen=$3 WHERE id_sesion=$1', [request.id_sesion, at(-28 + i % 24), request.campana]);
+      await m.query('UPDATE sesion_landing SET fecha=$2 WHERE id_sesion=$1', [request.id_sesion, at(-28 + i % 24)]);
       if (lead) await m.query('UPDATE lead SET id_sesion_origen=$2 WHERE id_lead=$1', [lead.idLead, request.id_sesion]);
       else {
         await m.query('UPDATE buyer SET apellidos=$2,nombres=$3,correo=$4,departamento=$5,universidad_otra=$6,fecha_registro=$7 WHERE id_buyer=$1', [request.id_buyer, apellidos, nombres, seedEmails[i], 'Lima', universities[i % 4], at(-8 + i % 8)]);
