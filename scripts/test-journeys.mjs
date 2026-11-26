@@ -686,20 +686,22 @@ try {
       async () => {
         await page.setViewportSize({ width: 1440, height: 1050 });
         await page.goto(origin + '/admin/recursos');
-        const card = page.locator('article').filter({
-          has: page.getByRole('heading', {
-            name: 'Matriz de consistencia',
-            exact: true,
-          }),
-        });
+        const card = page
+          .locator('li')
+          .filter({ hasText: 'Matriz de consistencia' })
+          .first();
         await card
-          .getByRole('button', { name: 'Enlaces', exact: true })
+          .getByRole('button', {
+            name: 'Enlaces de campaña Matriz de consistencia',
+            exact: true,
+          })
           .click();
         const dialog = page.getByRole('dialog');
         const newLink = dialog.getByRole('button', { name: 'Nuevo enlace' });
+        const channel = dialog.getByRole('combobox', { name: /Red social o canal/ });
+        await channel.or(newLink).first().waitFor();
         if (await newLink.isVisible()) await newLink.click();
-        await dialog
-          .getByLabel('Red social o canal', { exact: true })
+        await channel
           .selectOption('tiktok');
         await dialog
           .getByRole('button', { name: 'Crear y copiar enlace', exact: true })
@@ -714,30 +716,22 @@ try {
             exact: true,
           })
           .click();
-        await ui(
-          dialog.getByRole('heading', {
-            name: 'Historial de recursos y reuniones',
-            exact: true,
-          }),
-        ).toBeVisible();
+        await ui(dialog.getByRole('heading', { name: 'Actividad', exact: true })).toBeVisible();
         await dialog.press('Escape');
-        await page
-          .getByRole('link', { name: 'Reuniones', exact: true })
-          .click();
+        await page.goto(origin + '/admin/reuniones');
+        await ui(page.getByRole('button', { name: 'Lista', exact: true })).toBeVisible();
+        await page.screenshot({
+          path: resolve(output, 'calendario.png'),
+          fullPage: true,
+        });
+        await page.getByRole('button', { name: 'Lista', exact: true }).click();
         await page
           .getByLabel('Buscar reunión', { exact: true })
           .fill('persona-web@example.test');
-        await ui(
-          page.getByRole('heading', { name: 'Persona web', exact: true }),
-        ).toBeVisible();
-        const webMeeting = page.locator('article').filter({
-          has: page.getByRole('heading', {
-            name: 'Persona web',
-            exact: true,
-          }),
-        });
+        const webMeeting = page.locator('li').filter({ hasText: 'Persona web' });
+        await ui(webMeeting).toBeVisible();
         await webMeeting
-          .getByRole('button', { name: 'Cancelar reunión', exact: true })
+          .getByRole('button', { name: 'Cancelar reunión Persona web', exact: true })
           .click();
         await dialog
           .getByLabel('Motivo de cancelación', { exact: true })
@@ -747,7 +741,7 @@ try {
           .click();
         await ui(dialog).toHaveCount(0);
         await ui(
-          webMeeting.getByText('Cancelada', { exact: true }),
+          webMeeting.getByText('Cancelada', { exact: true }).first(),
         ).toBeVisible();
         await page.screenshot({
           path: resolve(output, 'administracion.png'),
