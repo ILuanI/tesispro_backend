@@ -20,6 +20,7 @@ export interface AIOptions {
   fetchImpl?: typeof fetch;
   fallbacks?: Omit<AIOptions, 'fallbacks'>[];
   timeoutMs?: number;
+  maxOutputTokens?: number;
 }
 export function aiEnvironment(env: Record<string, string | boolean | undefined>): AIOptions {
   const runtime = typeof process !== 'undefined' ? process.env : {};
@@ -94,7 +95,7 @@ async function structuredAttempt(instructions: string, input: string, schema: un
       systemInstruction: { parts: [{ text: instructions }] },
       contents: [{ role: 'user', parts: [{ text: input }] }],
       generationConfig: {
-        maxOutputTokens: 2048,
+        maxOutputTokens: options.maxOutputTokens ?? 2048,
         responseMimeType: 'application/json',
         responseJsonSchema: schema,
         ...(model === 'gemini-2.5-flash' ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
@@ -104,7 +105,7 @@ async function structuredAttempt(instructions: string, input: string, schema: un
       store: false,
       instructions,
       input,
-      max_output_tokens: 800,
+      max_output_tokens: options.maxOutputTokens ?? 800,
       text: { format: {
         type: 'json_schema', name, strict: true,
         schema,

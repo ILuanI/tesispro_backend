@@ -1,3 +1,4 @@
+import { WhatsAppModule } from './modules/whatsapp/whatsapp.module.js';
 import { AgentsModule } from './modules/agents/agents.module.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -18,6 +19,7 @@ import { AdminModule } from './modules/admin/admin.module.js';
   imports: [
     AdminModule,
     AgentsModule,
+    WhatsAppModule,
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     AcademicoModule,

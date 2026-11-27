@@ -5,7 +5,7 @@ async function bootstrap() {
   console.info('[bootstrap] Cargando modulos de NestJS.');
   const { AppModule } = await import('./app.module.js');
   console.info('[bootstrap] Inicializando NestJS y PostgreSQL.');
-  const app = await NestFactory.create(AppModule, { abortOnError: false });
+  const app = await NestFactory.create(AppModule, { abortOnError: false, rawBody: true });
   await app.init();
   console.info('[bootstrap] Modulos inicializados; iniciando servidor HTTP.');
   app.getHttpServer().once('listening', () => {

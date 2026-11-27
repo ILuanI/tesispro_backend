@@ -13,6 +13,7 @@ import { commercialTurn } from '../ai/commercial-turn.js';
 import { agentIds, registry, localRoute, normalize, authorizeTool, type AgentId } from './registry.js';
 import { selectTool } from './executor.js';
 import { JourneysService } from '../admin/journeys.service.js';
+import { localWhatsAppAnswer, publicCatalogReply, publicScopeReply, whatsappAiOff, type WhatsAppAiPolicy } from './whatsapp-public.js';
 import { selectKnowledge } from '../knowledge/knowledge.types.js';
 
 export const turnInput = requestSchema.extend({ idTurno: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
@@ -41,17 +42,64 @@ export class AgentsService {
     return {...result, proposal:(!result.orchestration || result.orchestration.agents.includes('negociador')) && selected && result.calificacion?.suficiente && result.calificacion?.servicio===selected.id ? proposal(result.state,catalog) : null,catalog};
   }
 
-  async turn(raw:unknown, cookie:string) {
+  private async whatsappPublicReply(message: string, catalog: NegotiationService[], policy: WhatsAppAiPolicy) {
+    let decision = localWhatsAppAnswer(message, catalog);
+    if (typeof decision === 'object') return `${decision.name}\n${decision.commercialDescription}`.slice(0, 2150);
+    if (decision === 'classify') {
+      decision = 'scope';
+      if (policy.aiMode === 'simulate') {
+        // Deterministic, network-free substitute for the optional classifier.
+        decision = 'catalog';
+      } else if (policy.aiMode === 'live' && policy.aiDailyLimit > 0) {
+        const options = this.ai.options(new TurnBudget(policy.aiTimeoutMs));
+        if (options.apiKey.trim()) {
+          const [reservation] = await this.db.query(`
+            INSERT INTO whatsapp_ai_budget(utc_day,calls) VALUES((now() AT TIME ZONE 'UTC')::date,1)
+            ON CONFLICT(utc_day) DO UPDATE SET calls=whatsapp_ai_budget.calls+1
+              WHERE whatsapp_ai_budget.calls<$1
+            RETURNING calls
+          `, [policy.aiDailyLimit]);
+          if (reservation) {
+            try {
+              const tool = await selectTool('marketing', message, {
+                ...options, fallbacks: [], maxOutputTokens: policy.aiOutputTokens, knowledge: undefined,
+              });
+              if (tool === 'recursos_publicos') decision = 'resources';
+              if (tool === 'catalogo_publico') decision = 'catalog';
+            } catch {
+              // Treat failures as a local clarification. Do not retry a billable decision.
+            }
+          }
+        }
+      }
+    }
+    if (decision === 'resources') return this.publicResourcesReply();
+    return decision === 'catalog' ? publicCatalogReply(catalog) : publicScopeReply;
+  }
+
+  private async publicResourcesReply() {
+    const resources = await this.journeys.publicResources();
+    return resources.length
+      ? 'Recursos publicados: ' + resources.slice(0, 6).map((r: { titulo: string }) => r.titulo).join(', ') + '. Puedes solicitarlos desde la sección de recursos de la web.'
+      : 'No hay recursos publicados disponibles en este momento.';
+  }
+
+  async turn(raw:unknown, cookie:string, channel: 'web_chat' | 'whatsapp' = 'web_chat', whatsappPolicy = whatsappAiOff) {
     const input=turnInput.parse(raw), started=Date.now(), budget=new TurnBudget();
+    const whatsapp = channel === 'whatsapp';
+    const normalized = normalize(input.message);
+    const wantsHuman = !/\bno (quiero|necesito|prefiero)\b/.test(normalized) && /\b(quiero|necesito|prefiero) (hablar|conversar) con (un |una )?(asesor|persona|humano)\b/.test(normalized);
+    const privateInquiry = whatsapp && (/\b(saldo|deuda|pague|pagado|comprobante|expediente|avance|entregable|mi pago|mi contrato|mi proyecto|mis datos|dni|cedula|contrasena)\b/.test(normalized)
+      || /[\w.+-]+@[\w.-]+\.[a-z]{2,}|\d(?:[ .-]?\d){6,}/i.test(input.message));
+    if (privateInquiry) input.message = 'Consulta privada que requiere verificación de identidad.';
     for (const id of agentIds) await this.db.query('INSERT INTO agente_ia(nombre,tipo,version,descripcion) VALUES($1,$2,$3,$4) ON CONFLICT(nombre) DO UPDATE SET version=excluded.version,descripcion=excluded.descripcion', [`Tesi ${id}`,id,registry[id].version,registry[id].instructions]);
-    const begin=await this.capture.begin(cookie,{idTurno:input.idTurno,mensaje:input.message},'agents');
+    const begin=await this.capture.begin(cookie,{idTurno:input.idTurno,mensaje:input.message},'agents',channel);
     let catalog:NegotiationService[]=[];
     try { catalog=packageServices(z.array(publicPackageSchema).parse(await this.packages.authorized())); } catch { /* Fail closed: no historical prices. */ }
     if (begin.resultado) return {token:begin.token,result:this.attach(begin.resultado,catalog)};
     let agent:AgentId='marketing';
     try {
       await this.db.query("INSERT INTO agente_ejecucion(id_turno,estado) VALUES($1,'procesando') ON CONFLICT(id_turno) DO UPDATE SET estado='procesando',actualizado_en=now()",[input.idTurno]);
-      const options=this.ai.options(budget);
       let state=begin.estado ? stateSchema.parse(begin.estado) : initialState();
       state={...state,catalogMode:true,discount:0};
       if (begin.attention !== 'derivada') {
@@ -65,17 +113,26 @@ export class AgentsService {
       let result:any=base;
       let knowledgeReleaseId: string | undefined;
       const requests:{agent:string;content:string}[]=[];
-      const human=begin.attention==='derivada' || (!/\bno (quiero|necesito|prefiero)\b/.test(normalize(input.message)) && /\b(quiero|necesito|prefiero) (hablar|conversar) con (un |una )?(asesor|persona|humano)\b/.test(normalize(input.message)));
+      const human = begin.attention === 'derivada' || wantsHuman;
       let agents:AgentId[]=[];
       if (human) {
         result={...base,reply:'Tu solicitud está en atención humana. Puedes continuar por WhatsApp o esperar la revisión de un asesor.',readyForHandoff:true};
         if (begin.attention!=='derivada') requests.push({agent:'postventa',content:input.message});
+      } else if (privateInquiry) {
+        result.reply = 'Este canal ofrece información general sobre TesisPro. Los datos privados requieren verificación de identidad. Si necesitas ayuda, escribe «quiero hablar con un asesor».';
+      } else if (whatsapp) {
+        const [disabled] = await this.db.query("SELECT 1 FROM agente_ia WHERE nombre='Tesi marketing' AND activo=false");
+        result.reply = disabled
+          ? 'Esta especialidad requiere atención de un asesor en este momento.'
+          : await this.whatsappPublicReply(input.message, catalog, whatsappPolicy);
+        if (!disabled) agents = ['marketing'];
       } else {
+        const options = this.ai.options(budget);
         const knowledge = await this.ai.knowledge.snapshot(input.idTurno, 'agents');
         knowledgeReleaseId = knowledge.releaseId;
         const route=await this.route(input.message,begin.history,options);
-        agents=route.agents;
-        agent=agents[0] || 'marketing';
+        agents = route.agents;
+        agent = agents[0] || 'marketing';
         if (route.clarify) result.reply='¿Quieres consultar servicios, pagos, una duda académica o una incidencia? Indica qué necesitas atender primero.';
         else {
           const replies:string[]=[];
@@ -97,10 +154,8 @@ export class AgentsService {
               const tool=greeting?'catalogo_publico':await selectTool(id,input.message,options);
               if(tool==='registrar_solicitud') {requests.push({agent:id,content:input.message});replies.push('Un asesor revisará tu solicitud de información.');}
               else if(tool==='faq') replies.push((await askFaq(input.message,options)).answer);
-              else if(tool==='recursos_publicos') {
-                const resources=await this.journeys.publicResources();
-                replies.push(resources.length ? 'Recursos publicados: '+resources.slice(0,6).map((r:any)=>r.titulo).join(', ')+'. Puedes solicitarlos desde la sección de recursos de la web.' : 'No hay recursos publicados disponibles en este momento.');
-              } else if(tool==='aclarar') replies.push('¿Qué información necesitas sobre nuestros servicios?');
+              else if(tool==='recursos_publicos') replies.push(await this.publicResourcesReply());
+              else if(tool==='aclarar') replies.push('¿Qué información necesitas sobre nuestros servicios?');
               else replies.push('Hola, soy Tesi. Puedo orientarte sobre servicios, pagos, dudas académicas y atención posterior.'+(catalog.length ? '\nPaquetes disponibles: '+catalog.slice(0,6).map(c=>c.name).join(', ')+'. ¿Qué necesitas resolver?' : '\nUn asesor puede ayudarte a revisar los servicios disponibles.'));
             } else {
               const privateQuery=/saldo|deuda|pague|pagado|comprobante|mi contrato|mi proyecto|avance|entregable/.test(normalize(input.message));

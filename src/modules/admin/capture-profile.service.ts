@@ -367,10 +367,10 @@ export class CaptureProfileService {
       return { ok: true, token: session.token, fechaInicio: iso, idReunion: meetingId };
     });
   }
-  private async conversation(m: EntityManager, session: any) {
+  private async conversation(m: EntityManager, session: any, channel: 'web_chat' | 'whatsapp') {
     const [c] = await m.query(
-      "INSERT INTO conversacion(id_sesion,id_lead,canal) VALUES($1,$2,'web_chat') ON CONFLICT(id_sesion) WHERE id_sesion IS NOT NULL AND cerrada_en IS NULL DO UPDATE SET id_sesion=excluded.id_sesion RETURNING *",
-      [session.id_sesion, session.id_lead],
+      "INSERT INTO conversacion(id_sesion,id_lead,canal) VALUES($1,$2,$3) ON CONFLICT(id_sesion) WHERE id_sesion IS NOT NULL AND cerrada_en IS NULL DO UPDATE SET id_sesion=excluded.id_sesion RETURNING *",
+      [session.id_sesion, session.id_lead, channel],
     );
     return c;
   }
@@ -392,10 +392,10 @@ export class CaptureProfileService {
       return { ok: true };
     });
   }
-  async begin(token: string, dto: TesiBeginDto, engine: 'legacy' | 'agents' = 'legacy') {
+  async begin(token: string, dto: TesiBeginDto, engine: 'legacy' | 'agents' = 'legacy', channel: 'web_chat' | 'whatsapp' = 'web_chat') {
     return this.db.transaction(async (m) => {
       const session = await this.session(m, token);
-      const c = await this.conversation(m, session);
+      const c = await this.conversation(m, session, channel);
       if (engine === 'legacy' && c.agente_expira && new Date(c.agente_expira).getTime() > Date.now()) throw new ConflictException('Hay un turno de agentes en proceso.');
       await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         'turn:' + dto.idTurno,
@@ -509,7 +509,7 @@ export class CaptureProfileService {
         }
         if (result.orchestration?.attention === 'human') {
           await m.query("UPDATE conversacion SET estado='derivada' WHERE id_conversacion=$1", [turn.id_conversacion]);
-          await m.query("INSERT INTO derivacion_humana(id_conversacion,id_lead,motivo) VALUES($1,$2,'Solicitud de atencion web') ON CONFLICT (id_conversacion) WHERE estado IN ('pendiente','en_atencion') DO NOTHING", [turn.id_conversacion,session.id_lead]);
+          await m.query("INSERT INTO derivacion_humana(id_conversacion,id_lead,motivo) VALUES($1,$2,CASE WHEN (SELECT canal FROM conversacion WHERE id_conversacion=$1)='whatsapp' THEN 'Solicitud de atencion WhatsApp' ELSE 'Solicitud de atencion web' END) ON CONFLICT (id_conversacion) WHERE estado IN ('pendiente','en_atencion') DO NOTHING", [turn.id_conversacion,session.id_lead]);
         }
       }
 
