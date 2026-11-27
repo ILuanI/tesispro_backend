@@ -34,7 +34,8 @@ export class WhatsAppEventsService {
   ) {}
 
   async persist(phone: string, incoming: Incoming[], statuses: DeliveryStatus[]) {
-    await this.db.transaction(async m => {
+    return this.db.transaction(async m => {
+      let inserted = 0;
       // Lock sessions in a consistent order even when batches overlap.
       const sessions = new Map<string, string>();
       for (const sender of [...new Set(incoming.map(event => event.sender))].sort()) {
@@ -47,16 +48,20 @@ export class WhatsAppEventsService {
       }
       for (const event of incoming) {
         const session = sessions.get(event.sender)!;
-        await m.query(`
+        const [result] = await m.query(`
           WITH inserted AS (
             INSERT INTO whatsapp_event(session_id,phone_id,wamid,turn_id,received_at,format,body)
             VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(phone_id,wamid) DO NOTHING RETURNING received_at
+          ), updated AS (
+            UPDATE whatsapp_session SET last_inbound_at=greatest(last_inbound_at, inserted.received_at)
+            FROM inserted WHERE id=$1 RETURNING 1
           )
-          UPDATE whatsapp_session SET last_inbound_at=greatest(last_inbound_at, inserted.received_at)
-          FROM inserted WHERE id=$1
+          SELECT EXISTS(SELECT 1 FROM updated) AS inserted
         `, [session, phone, event.wamid, randomUUID(), event.receivedAt, event.format, event.body]);
+        if (result.inserted) inserted++;
       }
       for (const status of statuses) await this.reconcile(m, phone, status);
+      return { inserted, duplicates: incoming.length - inserted };
     });
   }
 

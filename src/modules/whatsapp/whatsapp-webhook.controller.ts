@@ -1,6 +1,6 @@
 import {
   BadRequestException, Body, Controller, ForbiddenException, Get, Header, Headers,
-  HttpCode, Post, Query, Req, type RawBodyRequest,
+  HttpCode, InternalServerErrorException, Logger, Post, Query, Req, type RawBodyRequest,
 } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
@@ -20,6 +20,7 @@ export function validSignature(raw: Buffer | undefined, signature: string, secre
 @Public()
 @Controller('webhooks/whatsapp')
 export class WhatsAppWebhookController {
+  private readonly logger = new Logger(WhatsAppWebhookController.name);
   constructor(private readonly config: WhatsAppConfig, private readonly events: WhatsAppEventsService) {}
 
   @Get()
@@ -41,8 +42,25 @@ export class WhatsAppWebhookController {
     const { appSecret, phone, allowed } = this.config.get();
     if (!validSignature(request.rawBody, signature, appSecret)) throw new ForbiddenException();
     const batch = parseWebhook(body, phone, allowed);
-    if (!batch) throw new BadRequestException();
-    await this.events.persist(phone, batch.incoming, batch.statuses);
+    if (!batch) {
+      this.logger.warn({ event: 'whatsapp_webhook', outcome: 'invalid_envelope' });
+      throw new BadRequestException();
+    }
+    const summary = {
+      event: 'whatsapp_webhook',
+      ...batch.diagnostics,
+      eligible: batch.incoming.length,
+      statuses: batch.statuses.length,
+    };
+    try {
+      const persisted = await this.events.persist(phone, batch.incoming, batch.statuses);
+      this.logger.log({ ...summary, ...persisted, outcome: 'committed' });
+    } catch (error) {
+      const code = (error as { driverError?: { code?: unknown } } | null)?.driverError?.code;
+      const sqlState = typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
+      this.logger.error({ ...summary, outcome: 'persistence_error', sqlState });
+      throw new InternalServerErrorException();
+    }
     return { accepted: true };
   }
 }
