@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { z } from 'zod';
 import { CaptureProfileService } from '../admin/capture-profile.service.js';
@@ -17,6 +17,18 @@ import { localWhatsAppAnswer, publicCatalogReply, publicScopeReply, whatsappAiOf
 import { createHash } from 'node:crypto';
 
 export type ContactType = 'nuevo' | 'contacto' | 'lead' | 'cliente';
+
+/** Resume un error sin mensajes que puedan contener datos personales. */
+export function errorSummary(error: unknown) {
+  const value = error as { name?: unknown; status?: unknown; driverError?: { code?: unknown }; code?: unknown } | null;
+  const code = value?.driverError?.code ?? value?.code;
+  return {
+    exception: typeof value?.name === 'string' ? value.name : 'unknown',
+    ...(typeof value?.status === 'number' ? { httpStatus: value.status } : {}),
+    ...(typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? { sqlState: code } : {}),
+  };
+}
+
 import { selectKnowledge } from '../knowledge/knowledge.types.js';
 
 export const turnInput = requestSchema.extend({ idTurno: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
@@ -24,6 +36,7 @@ const routeSchema = z.object({agents:z.array(z.enum(agentIds)).max(5), clarify:z
 
 @Injectable()
 export class AgentsService {
+  private readonly logger = new Logger(AgentsService.name);
   constructor(private readonly db:DataSource, private readonly capture:CaptureProfileService, private readonly packages:PackagesService, private readonly payments:PaymentSchedulesService, private readonly ai:AiService, private readonly journeys:JourneysService) {}
 
   async route(message:string, history:unknown, options:AIOptions, contacto:ContactType='nuevo') {
@@ -192,7 +205,8 @@ export class AgentsService {
       await this.db.query("UPDATE agente_ejecucion SET agente=$2,version=$3,estado='completado',duracion_ms=$4,actualizado_en=now() WHERE id_turno=$1",[input.idTurno,agent,registry[agent].version,Date.now()-started]).catch(()=>undefined);
       console.info('[agents]',JSON.stringify({agent,durationMs:Date.now()-started,status:'completed'}));
       return {token:begin.token,result:this.attach(saved.resultado,catalog)};
-    } catch {
+    } catch (error) {
+      this.logger.error({ event: 'agent_turn', outcome: 'failed', channel, agent, ...errorSummary(error) });
       await this.db.query("UPDATE agente_ejecucion SET estado='fallido',duracion_ms=$2,actualizado_en=now() WHERE id_turno=$1 AND EXISTS(SELECT 1 FROM conversacion WHERE agente_turno=$1 AND agente_reserva=$3)",[input.idTurno,Date.now()-started,begin.reservation]).catch(()=>undefined);
       await this.db.query('UPDATE conversacion SET agente_turno=NULL,agente_reserva=NULL,agente_expira=NULL WHERE id_conversacion=$1 AND agente_reserva=$2',[begin.conversation,begin.reservation]).catch(()=>undefined);
       // Preserve token for retry after an anonymous session was created.

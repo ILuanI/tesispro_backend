@@ -249,6 +249,16 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     expect(send).toHaveBeenCalledTimes(2);
   });
 
+  it('drain waits for a short retry and resends without needing another message', async () => {
+    send.mockResolvedValueOnce({ kind: 'retry' });
+    await webhook([change([message('auto-retry')])]).expect(200);
+    const started = Date.now();
+    expect(await worker.drain()).toEqual({ processed: 2 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect((await db.query('SELECT state,attempts FROM whatsapp_event'))[0]).toEqual({ state: 'done', attempts: 2 });
+  });
+
   it('caps recoverable attempts and releases the next message in the same conversation', async () => {
     send.mockResolvedValue({ kind: 'retry' });
     await webhook([change([message('capped'),message('next')])]).expect(200);

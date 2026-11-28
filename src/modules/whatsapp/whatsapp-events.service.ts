@@ -184,6 +184,17 @@ export class WhatsAppEventsService {
     }
   }
 
+  /** Milisegundos hasta el próximo reintento pendiente (null si no hay ninguno). */
+  async nextRetryIn(phone: string): Promise<number | null> {
+    const [row] = await this.db.query(`
+      SELECT extract(epoch FROM min(greatest(e.next_attempt_at, coalesce(e.lease_until, e.next_attempt_at))) - clock_timestamp()) * 1000 AS ms
+      FROM whatsapp_event e JOIN whatsapp_session s ON s.id=e.session_id
+      WHERE s.phone_id=$1 AND e.state IN ('pending','processing')
+    `, [phone]);
+    // Sin eventos pendientes, min() es NULL.
+    return row?.ms === null || row?.ms === undefined ? null : Math.max(0, Math.ceil(Number(row.ms)));
+  }
+
   private async owned(m: EntityManager, job: WhatsAppJob) {
     const [session] = await m.query('SELECT id FROM whatsapp_session WHERE id=$1 FOR UPDATE', [job.session_id]);
     if (!session) return false;

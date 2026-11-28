@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { AgentsService } from '../agents/agents.service.js';
+import { Injectable, Logger } from '@nestjs/common';
+import { AgentsService, errorSummary } from '../agents/agents.service.js';
 import { initialState } from '../ai/state.js';
 import { WhatsAppCloudClient } from './whatsapp-cloud.client.js';
 import { senderAllowed, WhatsAppConfig } from './whatsapp.config.js';
@@ -15,6 +15,7 @@ export function whatsappText(result: { reply: string; proposal?: { name?: string
 
 @Injectable()
 export class WhatsAppWorkerService {
+  private readonly logger = new Logger(WhatsAppWorkerService.name);
   constructor(
     private readonly config: WhatsAppConfig,
     private readonly events: WhatsAppEventsService,
@@ -23,16 +24,19 @@ export class WhatsAppWorkerService {
   ) {}
 
   /**
-   * Procesa la cola hasta vaciarla o agotar el tiempo. Se lanza tras cada webhook y
-   * también atiende los reintentos que ya vencieron.
+   * Procesa la cola hasta vaciarla o agotar el tiempo. Se lanza tras cada webhook.
+   * Si un mensaje quedó programado para reintento dentro del tiempo disponible
+   * (2, 4, 8, 16 s), espera y lo reintenta en la misma ejecución.
    */
   async drain(budgetMs = 50_000, maxJobs = 20) {
     const deadline = Date.now() + budgetMs;
     let processed = 0;
     while (processed < maxJobs && Date.now() < deadline) {
       const { processed: worked } = await this.run();
-      if (!worked) break;
-      processed++;
+      if (worked) { processed++; continue; }
+      const wait = await this.events.nextRetryIn(this.config.get().phone);
+      if (wait === null || Date.now() + wait + 1_000 >= deadline) break;
+      await new Promise(resolve => setTimeout(resolve, wait + 100));
     }
     return { processed };
   }
@@ -58,6 +62,7 @@ export class WhatsAppWorkerService {
             idTurno: job.turn_id, message: job.body, history: [], state: initialState(),
           }, job.contact_token, 'whatsapp', config);
           if (!turn.result?.reply) {
+            this.logger.warn({ event: 'whatsapp_turn', outcome: 'retry', reason: 'no_reply', attempt: job.attempts });
             await this.events.settle(job, { kind: 'retry' });
             return { processed: true };
           }
@@ -65,7 +70,8 @@ export class WhatsAppWorkerService {
           handoff = turn.result.orchestration?.attention === 'human';
           reply = whatsappText(turn.result);
           if (handoff && !/asesor/i.test(reply)) reply =`${reply}\n\nUn asesor continuará la atención por este chat.`.slice(0, 4096);
-        } catch {
+        } catch (error) {
+          this.logger.warn({ event: 'whatsapp_turn', outcome: 'retry', reason: 'exception', attempt: job.attempts, ...errorSummary(error) });
           await this.events.settle(job, { kind: 'retry' });
           return { processed: true };
         }
