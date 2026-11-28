@@ -305,43 +305,7 @@ export class CaptureProfileService {
           'Ese horario acaba de reservarse. Elige otro.',
         );
       await this.calendar.reserve(m, iso);
-      let lead = found;
-      if (!lead) {
-        const [b] = await m.query(
-          'SELECT * FROM buyer WHERE id_buyer=$1 FOR UPDATE',
-          [buyer],
-        );
-        await this.identity.releaseBuyer(m, buyer);
-        const [l] = await m.query(
-          "INSERT INTO lead(nombres,correo,telefono,id_estado,id_sesion_origen,procedencia_campos) VALUES($1,$2,$3,(SELECT id_estado FROM estado_lead WHERE codigo='nuevo'),$4,$5) RETURNING id_lead",
-          [
-            b.nombres,
-            b.correo,
-            b.telefono,
-            session.id_sesion,
-            b.procedencia_campos,
-          ],
-        );
-        lead = l.id_lead;
-        await m.query(
-          'INSERT INTO perfil_academico(id_lead,id_universidad,universidad_otra,id_grado,condicion) VALUES($1,$2,$3,$4,$5)',
-          [lead, b.id_universidad, b.universidad_otra, b.id_grado, b.condicion],
-        );
-        if (b.id_etapa)
-          await m.query(
-            'INSERT INTO proyecto_tesis(id_lead,id_etapa,observaciones) VALUES($1,$2,$3)',
-            [lead, b.id_etapa, b.notas],
-          );
-        await m.query(
-          "UPDATE buyer SET estado='lead',id_lead=$2,fecha_conversion=now() WHERE id_buyer=$1",
-          [buyer, lead],
-        );
-        await m.query(
-          'UPDATE solicitud_recurso SET id_lead=$2 WHERE id_buyer=$1',
-          [buyer, lead],
-        );
-        await this.identity.converted(m, buyer, lead);
-      }
+      const lead = found || await this.convertBuyerToLead(m, buyer, session.id_sesion);
       await this.bind(m, { ...session, id_lead: lead }, buyer, lead);
       await completeBookingLeadProfile(m, lead, dto);
       const meetingId = randomUUID();
@@ -366,6 +330,76 @@ export class CaptureProfileService {
       );
       return { ok: true, token: session.token, fechaInicio: iso, idReunion: meetingId };
     });
+  }
+  /** Convierte un buyer en lead (estado inicial «nuevo») y traslada su historial. */
+  async convertBuyerToLead(m: EntityManager, buyer: string, sessionId: string | null) {
+    const [b] = await m.query(
+      'SELECT * FROM buyer WHERE id_buyer=$1 FOR UPDATE',
+      [buyer],
+    );
+    if (b.id_lead) return b.id_lead as string;
+    await this.identity.releaseBuyer(m, buyer);
+    const [l] = await m.query(
+      "INSERT INTO lead(nombres,correo,telefono,id_estado,id_sesion_origen,procedencia_campos) VALUES($1,$2,$3,(SELECT id_estado FROM estado_lead WHERE codigo='nuevo'),$4,$5) RETURNING id_lead",
+      [b.nombres, b.correo, b.telefono, sessionId, b.procedencia_campos],
+    );
+    const lead = l.id_lead as string;
+    await m.query(
+      'INSERT INTO perfil_academico(id_lead,id_universidad,universidad_otra,id_grado,condicion) VALUES($1,$2,$3,$4,$5)',
+      [lead, b.id_universidad, b.universidad_otra, b.id_grado, b.condicion],
+    );
+    if (b.id_etapa)
+      await m.query(
+        'INSERT INTO proyecto_tesis(id_lead,id_etapa,observaciones) VALUES($1,$2,$3)',
+        [lead, b.id_etapa, b.notas],
+      );
+    await m.query(
+      "UPDATE buyer SET estado='lead',id_lead=$2,fecha_conversion=now() WHERE id_buyer=$1",
+      [buyer, lead],
+    );
+    await m.query(
+      'UPDATE solicitud_recurso SET id_lead=$2 WHERE id_buyer=$1',
+      [buyer, lead],
+    );
+    await this.identity.converted(m, buyer, lead);
+    return lead;
+  }
+  /**
+   * Clasificación automática por WhatsApp. Solo avanza, nunca retrocede:
+   * buyer -> lead (nuevo) cuando hay necesidad calificada o intención de contratar;
+   * lead nuevo -> calificado -> en_negociacion según la calificación de Tesi.
+   * «propuesta_enviada», «payer» (cliente) y «perdido» los decide el equipo comercial.
+   */
+  private async classifyWhatsApp(m: EntityManager, session: any, qualification: any, state: any) {
+    const intent = qualification?.nivel === 'intencion_contratacion' || state?.buyIntent === true;
+    const qualified = qualification?.suficiente === true || ['alto', 'intencion_contratacion'].includes(qualification?.nivel);
+    if (!intent && !qualified) return session;
+    let lead = session.id_lead as string | null;
+    if (!lead && session.id_buyer) {
+      // El trigger fn_lead_historial registra el estado inicial con este motivo.
+      await m.query("SELECT set_config('app.admin_motivo','Tesi (WhatsApp): contacto convertido en lead',true)");
+      lead = await this.convertBuyerToLead(m, session.id_buyer, session.id_sesion);
+      await m.query("SELECT set_config('app.admin_motivo','',true)");
+      await this.bind(m, { ...session, id_lead: lead }, session.id_buyer, lead);
+      session = { ...session, id_lead: lead };
+    }
+    if (!lead) return session;
+    const target = intent ? 'en_negociacion' : 'calificado';
+    const [current] = await m.query(
+      'SELECT e.codigo,e.orden FROM lead l JOIN estado_lead e USING(id_estado) WHERE l.id_lead=$1 FOR UPDATE OF l',
+      [lead],
+    );
+    const [next] = await m.query('SELECT id_estado,orden FROM estado_lead WHERE codigo=$1', [target]);
+    if (!current || !next || !['nuevo', 'calificado'].includes(current.codigo) || next.orden <= current.orden) return session;
+    // fn_lead_historial guarda el cambio; aquí se indica el motivo y el agente responsable.
+    await m.query("SELECT set_config('app.admin_motivo',$1,true)", [intent ? 'Tesi (WhatsApp): intención de contratar' : 'Tesi (WhatsApp): necesidad y etapa identificadas']);
+    await m.query('UPDATE lead SET id_estado=$2,updated_at=now() WHERE id_lead=$1', [lead, next.id_estado]);
+    await m.query("SELECT set_config('app.admin_motivo','',true)");
+    await m.query(
+      "UPDATE lead_estado_historial SET id_agente=(SELECT id_agente FROM agente_ia WHERE nombre='Tesi negociador') WHERE id_historial=(SELECT max(id_historial) FROM lead_estado_historial WHERE id_lead=$1)",
+      [lead],
+    );
+    return session;
   }
   private async conversation(m: EntityManager, session: any, channel: 'web_chat' | 'whatsapp') {
     const [c] = await m.query(
@@ -392,7 +426,7 @@ export class CaptureProfileService {
       return { ok: true };
     });
   }
-  async begin(token: string, dto: TesiBeginDto, engine: 'legacy' | 'agents' = 'legacy', channel: 'web_chat' | 'whatsapp' = 'web_chat') {
+  async begin(token: string, dto: TesiBeginDto, engine: 'legacy' | 'agents' = 'legacy', channel: 'web_chat' | 'whatsapp' = 'web_chat', contextMinutes?: number) {
     return this.db.transaction(async (m) => {
       const session = await this.session(m, token);
       const c = await this.conversation(m, session, channel);
@@ -427,12 +461,25 @@ export class CaptureProfileService {
         [c.id_conversacion, dto.idTurno],
       );
       const [previousQualification] = await m.query('SELECT resultado FROM calificacion_tesi WHERE id_conversacion=$1 ORDER BY id_calificacion DESC LIMIT 1', [c.id_conversacion]);
-      const historyRows = (
-        await m.query(
-          'SELECT id_mensaje,remitente,contenido FROM mensaje WHERE id_conversacion=$1 AND ($2::bigint IS NULL OR id_mensaje<>$2::bigint) ORDER BY id_mensaje DESC LIMIT 12',
-          [c.id_conversacion, prior?.id_mensaje || null],
-        )
-      ).reverse();
+      const recentRows = await m.query(
+        'SELECT id_mensaje,remitente,contenido,enviado_en,clock_timestamp() AS ahora FROM mensaje WHERE id_conversacion=$1 AND ($2::bigint IS NULL OR id_mensaje<>$2::bigint) ORDER BY id_mensaje DESC LIMIT 12',
+        [c.id_conversacion, prior?.id_mensaje || null],
+      );
+      // Ventana de contexto: tras más de N minutos sin mensajes, Tesi no usa el historial
+      // anterior. Los datos del contacto y su calificación se conservan.
+      if (contextMinutes && recentRows.length) {
+        // Se recorre del más reciente al más antiguo y se corta en el primer hueco largo.
+        let reference = +new Date(recentRows[0].ahora);
+        let kept = 0;
+        for (const row of recentRows) {
+          const sent = +new Date(row.enviado_en);
+          if (reference - sent > contextMinutes * 60_000) break;
+          reference = sent;
+          kept++;
+        }
+        recentRows.splice(kept);
+      }
+      const historyRows = recentRows.reverse();
       const evidenceHistory = historyRows.filter((item: any) => item.remitente === 'lead').map((item: any) => ({ idMensaje: item.id_mensaje, text: item.contenido }));
       const history = historyRows.map((m: any) => ({
           role: m.remitente === 'lead' ? 'user' : 'assistant',
@@ -488,7 +535,7 @@ export class CaptureProfileService {
       );
       if (!session) throw new UnauthorizedException('Sesión expirada.');
       const [turn] = await m.query(
-        'SELECT t.*,c.id_sesion,m.contenido FROM turno_tesi t JOIN conversacion c USING(id_conversacion) JOIN mensaje m USING(id_mensaje) WHERE id_turno=$1 FOR UPDATE OF t',
+        'SELECT t.*,c.id_sesion,c.canal,m.contenido FROM turno_tesi t JOIN conversacion c USING(id_conversacion) JOIN mensaje m USING(id_mensaje) WHERE id_turno=$1 FOR UPDATE OF t',
         [dto.idTurno],
       );
       if (
@@ -521,6 +568,7 @@ export class CaptureProfileService {
       if (interpretation) {
         const qualification = await this.qualification.evaluate(m, turn.id_conversacion, dto.idTurno, session.id_lead, session.id_buyer, result.interpretacionR7, result.state.packageVersion);
         result.calificacion = qualification;
+        if (turn.canal === 'whatsapp') await this.classifyWhatsApp(m, session, qualification, result.state);
         delete result.interpretacionR7;
         if (!qualification.suficiente || !qualification.servicio || result.state.service !== qualification.servicio) {
           result.proposal = null;

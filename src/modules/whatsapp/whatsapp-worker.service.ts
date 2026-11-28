@@ -2,8 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { AgentsService } from '../agents/agents.service.js';
 import { initialState } from '../ai/state.js';
 import { WhatsAppCloudClient } from './whatsapp-cloud.client.js';
-import { WhatsAppConfig } from './whatsapp.config.js';
+import { senderAllowed, WhatsAppConfig } from './whatsapp.config.js';
 import { WhatsAppEventsService } from './whatsapp-events.service.js';
+
+/** Texto que se envía por WhatsApp: la respuesta de Tesi y, si existe, la propuesta preliminar. */
+export function whatsappText(result: { reply: string; proposal?: { name?: string; text?: string; condition?: string } | null }) {
+  const proposal = result.proposal?.text
+    ? `\n\nPropuesta preliminar: ${result.proposal.name ? `${result.proposal.name} — ` : ''}${result.proposal.text}.${result.proposal.condition ? `\n${result.proposal.condition}` : ''}`
+    : '';
+  return (result.reply + proposal).slice(0, 4000);
+}
 
 @Injectable()
 export class WhatsAppWorkerService {
@@ -14,13 +22,28 @@ export class WhatsAppWorkerService {
     private readonly cloud: WhatsAppCloudClient,
   ) {}
 
+  /**
+   * Procesa la cola hasta vaciarla o agotar el tiempo. Se lanza tras cada webhook y
+   * también atiende los reintentos que ya vencieron.
+   */
+  async drain(budgetMs = 50_000, maxJobs = 20) {
+    const deadline = Date.now() + budgetMs;
+    let processed = 0;
+    while (processed < maxJobs && Date.now() < deadline) {
+      const { processed: worked } = await this.run();
+      if (!worked) break;
+      processed++;
+    }
+    return { processed };
+  }
+
   async run() {
     const config = this.config.get();
     const { phone, allowed } = config;
     const job = await this.events.claim(phone);
     if (!job) return { processed: false };
     if (job === 'recovered') return { processed: true };
-    if (!allowed.includes(job.sender_id) || !await this.events.allowed(job, job.handoff)) {
+    if (!senderAllowed(allowed, job.sender_id) || !await this.events.allowed(job, job.handoff)) {
       await this.events.skip(job);
       return { processed: true };
     }
@@ -30,6 +53,7 @@ export class WhatsAppWorkerService {
     if (!reply) {
       if (job.format === 'text') {
         try {
+          // El historial y el estado se leen de la conversación guardada (ver CaptureProfileService.begin).
           const turn = await this.agents.turn({
             idTurno: job.turn_id, message: job.body, history: [], state: initialState(),
           }, job.contact_token, 'whatsapp', config);
@@ -37,8 +61,10 @@ export class WhatsAppWorkerService {
             await this.events.settle(job, { kind: 'retry' });
             return { processed: true };
           }
-          handoff = turn.result.readyForHandoff === true;
-          reply = handoff ? 'Un asesor revisará tu solicitud.' : turn.result.reply;
+          // Si el turno pasó a atención humana, se envía igualmente la respuesta de Tesi con el aviso.
+          handoff = turn.result.orchestration?.attention === 'human';
+          reply = whatsappText(turn.result);
+          if (handoff && !/asesor/i.test(reply)) reply =`${reply}\n\nUn asesor continuará la atención por este chat.`.slice(0, 4096);
         } catch {
           await this.events.settle(job, { kind: 'retry' });
           return { processed: true };

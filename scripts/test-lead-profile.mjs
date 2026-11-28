@@ -201,13 +201,17 @@ try {
   await call(`/admin/propuestas-comerciales/catalogo/servicios/${r8other.id_servicio}`, 'PUT', { precio:'100.00', moneda:'PEN', activo:true, entregables:['Etapa'], condiciones:'Modalidad virtual', descuentoMax:0, revision:1 });
   await call('/admin/propuestas-comerciales/catalogo/incompatibilidad', 'PUT', {primero:r8service.id_servicio,segundo:r8other.id_servicio,incompatible:true});
   await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', twoLines, 400);
+  // R8: el backend genera la descripción con el proveedor de IA; se simula Gemini.
+  process.env.AI_PROVIDER_ORDER = 'gemini'; process.env.GEMINI_API_KEY = 'test-only';
+  const isProvider = url => String(url).startsWith('https://generativelanguage.googleapis.com/');
+  const providerReply = value => Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(value)}]}}]});
   const aiFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async (url, init) => String(url).includes('/api/internal/proposal') ? Response.json({error:'no disponible'},{status:503}) : aiFetch(url, init);
+    globalThis.fetch = async (url, init) => isProvider(url) ? Response.json({error:{message:'no disponible'}},{status:503}) : aiFetch(url, init);
     const [{n:beforeR8}] = await db.query('SELECT count(*)::int n FROM r8_propuesta');
     await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', { componentes:[{idServicio:r8service.id_servicio,cantidad:1}] }, 503);
     assert.equal((await db.query('SELECT count(*)::int n FROM r8_propuesta'))[0].n,beforeR8);
-    globalThis.fetch = async (url, init) => String(url).includes('/api/internal/proposal') ? Response.json({texto:'Acompañamiento para el análisis estadístico.',ids:[r8service.id_servicio]}) : aiFetch(url, init);
+    globalThis.fetch = async (url, init) => isProvider(url) ? providerReply({texto:'Acompañamiento para el análisis estadístico.',ids:[r8service.id_servicio]}) : aiFetch(url, init);
     const recommendation = await call(`/admin/propuestas-comerciales/lead/${id}/recomendaciones`, 'POST', {}, 201);
     assert.deepEqual(recommendation.ids,[r8service.id_servicio]);
     const proposal = await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', { componentes:[{idServicio:r8service.id_servicio,cantidad:2}], descuentoPorcentaje:10, motivoExcepcion:'Solicitud comercial' }, 201);
@@ -282,7 +286,7 @@ try {
   await call(`/admin/propuestas-comerciales/catalogo/paquetes/${pkg.idServicio}/opcionales`, 'PUT', {servicios:[r8other.id_servicio]});
   const packageFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async (url, init) => String(url).includes('/api/internal/proposal') ? Response.json({texto:'Asesoría académica personalizada.',ids:[r8service.id_servicio,r8other.id_servicio]}) : packageFetch(url, init);
+    globalThis.fetch = async (url, init) => isProvider(url) ? providerReply({texto:'Asesoría académica personalizada.',ids:[r8service.id_servicio,r8other.id_servicio]}) : packageFetch(url, init);
     const composed = await call(`/admin/propuestas-comerciales/lead/${id}`, 'POST', {idPaquete:pkg.idServicio,versionPaquete:pkg.version,componentes:[{idServicio:r8service.id_servicio,cantidad:1},{idServicio:r8other.id_servicio,cantidad:1}]}, 201);
     assert.equal(composed.contenido.total,'225.50');
     assert.equal(composed.contenido.componentes.length,2);
@@ -295,13 +299,13 @@ try {
   assert.equal(pkgSaved.resultado.calificacion.servicio, pkgId);
   if (process.env.R7_INTEGRATION === '1') {
     const priorVisitor = visitor, oldFetch = globalThis.fetch;
-    const envNames = ['CRM_API_URL', 'API_PROXY_TARGET', 'AI_PROVIDER', 'GEMINI_API_KEY', 'OPENAI_API_KEY'];
+    const envNames = ['CRM_API_URL', 'API_PROXY_TARGET', 'AI_PROVIDER_ORDER', 'GEMINI_API_KEY'];
     const oldEnv = Object.fromEntries(envNames.map(key => [key, process.env[key]]));
     try {
       visitor = '';
       await call('/captacion/perfiles', 'POST', { ...capture, clave: randomUUID() }, 201);
       process.env.CRM_API_URL = base; process.env.API_PROXY_TARGET = base;
-      process.env.AI_PROVIDER = 'gemini'; process.env.GEMINI_API_KEY = 'test-only'; delete process.env.OPENAI_API_KEY;
+      process.env.AI_PROVIDER_ORDER = 'gemini'; process.env.GEMINI_API_KEY = 'test-only';
       globalThis.fetch = async (url, init) => {
         if (!String(url).startsWith('https://generativelanguage.googleapis.com/')) return oldFetch(url, init);
         const request = JSON.parse(init.body), input = JSON.parse(request.contents[0].parts[0].text);
@@ -593,13 +597,12 @@ try {
     process.env.CRM_API_URL=base;
     process.env.API_PROXY_TARGET=base;
     if(process.env.R7_UI==='1') {
-      process.env.AI_PROVIDER='gemini';process.env.GEMINI_API_KEY='test-only';process.env.GEMINI_MODEL='test-model';process.env.OPENAI_API_KEY='';
+      process.env.AI_PROVIDER_ORDER='gemini';process.env.GEMINI_API_KEY='test-only';process.env.GEMINI_MODEL='test-model';
       await import('./r7-ai-mock.mjs');
     }
     uiProxy=await developmentUiProxy(base,process.env.TEST_UI_TARGET||'http://localhost:4321');
     const origin=uiProxy.origin;
     process.env.APP_ORIGIN=origin;
-    process.env.R8_AI_URL=origin+'/api/internal/proposal';
     browser = await chromium.launch({ channel: 'msedge', headless: true });
     const page = await browser.newPage();
     const errors = [];

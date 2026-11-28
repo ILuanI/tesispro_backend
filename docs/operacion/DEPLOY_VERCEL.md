@@ -27,8 +27,9 @@ Las rutas del backend no llevan el prefijo `/api`.
 | `NODE_ENV` | `production` |
 | `APP_ORIGIN` | `https://tesispro-eta.vercel.app`, si este es el dominio definitivo del frontend; sin barra final |
 | `CRM_BRIDGE_SECRET` | Secreto de al menos 32 caracteres, identico al del servidor Astro |
-| `R8_AI_URL` | `https://tesispro-eta.vercel.app/api/internal/proposal` |
+| `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` | Claves de IA; basta con una. Modelos y orden: ver `.env.example` (`*_MODEL`, `AI_PROVIDER_ORDER`) |
 | `REFERRAL_TTL_DAYS` | `30`, opcional |
+| `WHATSAPP_*` | Opcional: atención automática por WhatsApp. Ver `docs/operacion/WHATSAPP_PILOTO.md` |
 
 Vercel define `VERCEL=1` automaticamente. En ese entorno SSL se activa por defecto,
 se validan las variables de conexion, se limita el pool y se realizan dos intentos

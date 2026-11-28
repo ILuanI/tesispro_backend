@@ -15,7 +15,7 @@ La migración `BusinessKnowledge1793300000000` añade documentos, versiones, pub
 
 Los Markdown iniciales están en `src/modules/knowledge/documents/`. Nest los copia junto al código compilado. Una vez inicializada la base, editar esos archivos no modifica lo publicado: el panel es la fuente vigente.
 
-Desplegar backend y frontend. Para los dos motores (`AGENTS_ENABLED=true` y `false`), Astro necesita `CRM_API_URL` apuntando a NestJS y el mismo `CRM_BRIDGE_SECRET` privado, de al menos 32 caracteres. No hay un interruptor adicional de conocimiento: si la publicación falta o no puede obtenerse, las operaciones de IA que la necesitan fallan de forma recuperable y ofrecen atención humana; nunca cargan las tarifas o FAQ históricas como alternativa. Los saludos y controles locales seguros pueden funcionar sin llamar al modelo.
+Desplegar backend y frontend. Astro solo reenvía las consultas al backend y necesita `CRM_API_URL` apuntando a NestJS y el mismo `CRM_BRIDGE_SECRET` privado, de al menos 32 caracteres. No hay un interruptor adicional de conocimiento: si la publicación falta o no puede obtenerse, las operaciones de IA que la necesitan fallan de forma recuperable y ofrecen atención humana; nunca cargan las tarifas o FAQ históricas como alternativa. Los saludos y controles locales seguros pueden funcionar sin llamar al modelo.
 
 ## Uso del panel
 
@@ -59,7 +59,7 @@ Se admiten hasta 40 entradas, cada una con un identificador único y respuesta n
 - Las reglas del código y las validaciones de herramientas siguen siendo obligatorias. Los documentos se incluyen como datos de referencia dentro de la solicitud, nunca como nuevas instrucciones de sistema.
 - El enrutador usa el registro fijo de especialidades. Cada agente recibe perfil y especialidad; marketing y académico pueden recibir además FAQ. El generador de propuestas recibe contexto de negociación, conservando sus restricciones actuales sobre importes, garantías y entregables.
 - Precios, componentes, condiciones y modalidades de pago proceden del catálogo y servicios autorizados; disponibilidad procede del calendario. Los Markdown no pueden autorizar descuentos ni confirmar pagos.
-- `AGENTS_ENABLED=false` obtiene el contexto mediante `POST /internal/knowledge/context`, protegido por el secreto del puente. `true` lo obtiene dentro de NestJS. Ninguno recurre a la copia histórica de FAQ para completar datos ausentes.
+- El contexto se obtiene dentro de NestJS; `POST /internal/knowledge/context` (protegido por el secreto del puente) ya no lo usa el frontend. No se recurre a la copia histórica de FAQ para completar datos ausentes.
 - Las respuestas FAQ conservan `sourceIds` y pueden añadir `knowledgeSources` con identificador documental, versión y fecha. Las referencias deben pertenecer al contexto enviado; referencias inexistentes producen información insuficiente. Las rutas de fuentes internas y las referencias del editor no se envían al modelo.
 
 Este módulo conserva el historial de conversación existente. No añade memoria entre canales, resumen automático, integración de WhatsApp, embeddings, búsqueda semántica ni importación de las transcripciones en tiempo de ejecución.

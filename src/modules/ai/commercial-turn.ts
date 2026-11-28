@@ -59,7 +59,6 @@ export async function commercialTurn(input: {message:string}, begin:any, catalog
       }
       if (!Object.keys(interpretacionR7.campos).length && !Object.keys(interpretacionR7.senales).length && !Object.keys(interpretacionR7.objeciones || {}).length) {
         interpretacionR7 = null;
-        if (!result.state.humanRequested) result = { ...result, state: { ...result.state, service: null }, proposal: null, reply: '¿Qué necesitas resolver en tu tesis?' };
       }
     }
     } catch (error) {
@@ -74,9 +73,13 @@ export async function commercialTurn(input: {message:string}, begin:any, catalog
     }
     result.state = { ...result.state, catalogMode: true, discount: 0, packageVersion: catalog.find(item => item.id === result.state.service)?.version || null };
     if (changed && selected && result.state.service === selected.id && !result.state.humanRequested) {
+      const wasAccepting = result.readyForHandoff;
       result.state.buyIntent = false;
-      result.reply = 'Las condiciones del paquete cambiaron. Revisa la versión vigente antes de confirmar.';
-      result.quickReplies = ['¿Qué incluye el servicio?'];
+      result.state.stage = qualifyStage(result.state);
+      if (wasAccepting) {
+        result.reply = `Te muestro el contenido y el precio actuales de ${selected.name} en la propuesta. ¿Quieres continuar con estas condiciones?`;
+        result.quickReplies = ['Quiero continuar con un asesor', '¿Qué incluye el servicio?'];
+      }
       result.readyForHandoff = false;
     }
 

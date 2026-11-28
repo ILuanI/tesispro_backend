@@ -11,14 +11,20 @@ const settings = z.object({
   appSecret: z.string().min(1),
   verifyToken: z.string().min(32),
   version: z.string().regex(/^v[1-9]\d*\.0$/),
-  allowed: z.array(z.string().regex(senderId)).min(1),
-  workerSecret: z.string().min(32),
-  aiMode: z.enum(['off', 'simulate', 'live']),
-  aiDailyLimit: z.coerce.number().int().min(0).max(1000),
-  aiOutputTokens: z.coerce.number().int().min(64).max(512),
-  aiTimeoutMs: z.coerce.number().int().min(1000).max(10000),
+  // Vacío = se atiende a cualquier remitente (producción). Con valores, solo a esos (pruebas).
+  allowed: z.array(z.string().regex(senderId)),
+  // Solo lo usa el endpoint opcional de reintentos /internal/whatsapp/jobs/process.
+  workerSecret: z.string().min(32).optional(),
+  aiMode: z.enum(['off', 'live']),
+  aiDailyLimit: z.coerce.number().int().min(0).max(1_000_000),
+  contextMinutes: z.coerce.number().int().min(1).max(1440),
   sessionKey: z.base64().transform(value => Buffer.from(value, 'base64')).refine(key => key.length === 32),
 });
+
+/** Lista vacía = todos los remitentes permitidos. */
+export function senderAllowed(allowed: readonly string[], sender: string) {
+  return !allowed.length || allowed.includes(sender);
+}
 
 export function sameSecret(value: string, expected: string) {
   const hash = (input: string) => createHash('sha256').update(input).digest();
@@ -51,11 +57,10 @@ export class WhatsAppConfig {
       verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
       version: process.env.WHATSAPP_GRAPH_API_VERSION || 'v27.0',
       allowed: (process.env.WHATSAPP_ALLOWED_SENDERS || '').split(',').map(value => value.trim()).filter(Boolean),
-      workerSecret: process.env.WHATSAPP_WORKER_SECRET,
-      aiMode: process.env.WHATSAPP_AI_MODE ?? 'off',
-      aiDailyLimit: process.env.WHATSAPP_AI_DAILY_LIMIT ?? 10,
-      aiOutputTokens: process.env.WHATSAPP_AI_OUTPUT_TOKENS ?? 128,
-      aiTimeoutMs: process.env.WHATSAPP_AI_TIMEOUT_MS ?? 5000,
+      workerSecret: process.env.WHATSAPP_WORKER_SECRET || undefined,
+      aiMode: process.env.WHATSAPP_AI_MODE || 'live',
+      aiDailyLimit: process.env.WHATSAPP_AI_DAILY_LIMIT || 500,
+      contextMinutes: process.env.WHATSAPP_CONTEXT_MINUTES || 5,
       sessionKey: process.env.WHATSAPP_SESSION_KEY,
     });
     if (!result.success) throw new ServiceUnavailableException('Configuración de WhatsApp incompleta.');

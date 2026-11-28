@@ -18,6 +18,7 @@ export class TurnBudget {
 @Injectable()
 export class AiService {
   constructor(readonly knowledge: KnowledgeService) {}
+  /** Proveedor y respaldos de IA (ver AI_PROVIDER_ORDER en .env.example). */
   options(budget = new TurnBudget(), knowledge?: KnowledgeContext): AIOptions {
     const options = aiEnvironment(process.env);
     return { ...options, knowledge, get timeoutMs() { return budget.remaining(); } };

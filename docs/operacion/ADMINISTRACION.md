@@ -129,7 +129,7 @@ La migración `CommercialProposals1792700000000` añade configuración comercial
 
 La ficha permite solicitar una recomendación, generar el borrador, comparar versiones, aprobar excepciones, registrar revisión y presentación manual y guardar la decisión del cliente. Los descuentos superiores a lo configurado y las condiciones especiales requieren motivo y aprobación explícita de un administrador, incluso cuando sea el mismo autor. Una nueva versión exige una nueva revisión y aprobación. La aceptación habilita registrar un contrato firmado que conserva la propuesta aceptada. Ninguna acción envía mensajes al cliente.
 
-El backend llama a `R8_AI_URL` (por defecto `http://localhost:4321/api/internal/proposal`) autenticado con `CRM_BRIDGE_SECRET`; Astro utiliza su proveedor de IA configurado. La descripción generada se revisa antes de presentar. La IA no recibe los precios autorizados del catálogo ni calcula importes; el contexto del lead puede contener sus propias referencias a precios. `pnpm test:lead-profile` cubre versiones, cálculos, excepción y contratación en un esquema temporal; la landing incluye `tests/r8-proposal.test.mjs` y el recorrido de ficha con respuestas simuladas en `tests/r7-dev-browser.mjs`.
+El backend genera la descripción con el proveedor de IA configurado (`AI_PROVIDER_ORDER`). La descripción generada se revisa antes de presentar. La IA no recibe los precios autorizados del catálogo ni calcula importes; el contexto del lead puede contener sus propias referencias a precios. `pnpm test:lead-profile` cubre versiones, cálculos, excepción y contratación en un esquema temporal; el recorrido de ficha con respuestas simuladas en `tests/r7-dev-browser.mjs`.
 
 
 

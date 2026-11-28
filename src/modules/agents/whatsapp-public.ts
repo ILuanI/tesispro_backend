@@ -2,15 +2,15 @@ import type { NegotiationService } from '../ai/packages.js';
 import { localRoute, normalize } from './registry.js';
 
 export type WhatsAppAiPolicy = {
-  aiMode: 'off' | 'simulate' | 'live';
+  /** off: solo respuestas por reglas. live: orquestador y agentes con IA. */
+  aiMode: 'off' | 'live';
+  /** Turnos con IA por día (UTC). 0 desactiva la IA. */
   aiDailyLimit: number;
-  aiOutputTokens: number;
-  aiTimeoutMs: number;
+  /** Minutos sin mensajes tras los que Tesi deja de usar el historial reciente. */
+  contextMinutes: number;
 };
 
-export const whatsappAiOff: WhatsAppAiPolicy = {
-  aiMode: 'off', aiDailyLimit: 0, aiOutputTokens: 128, aiTimeoutMs: 5_000,
-};
+export const whatsappAiOff: WhatsAppAiPolicy = { aiMode: 'off', aiDailyLimit: 0, contextMinutes: 5 };
 
 export const publicScopeReply = 'Puedo responder preguntas generales sobre TesisPro y sus servicios. ¿Qué servicio te interesa?';
 

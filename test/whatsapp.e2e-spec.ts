@@ -16,6 +16,10 @@ import { WhatsAppModule } from '../src/modules/whatsapp/whatsapp.module.js';
 import { WhatsAppCloudClient } from '../src/modules/whatsapp/whatsapp-cloud.client.js';
 import { WhatsAppEventsService, type WhatsAppJob } from '../src/modules/whatsapp/whatsapp-events.service.js';
 import { WhatsAppWorkerService } from '../src/modules/whatsapp/whatsapp-worker.service.js';
+import { WhatsAppWebhookController } from '../src/modules/whatsapp/whatsapp-webhook.controller.js';
+
+// Las pruebas procesan la cola de forma explícita; una sola prueba verifica el disparo automático.
+const pauseBackground = () => vi.spyOn(WhatsAppWebhookController.prototype as any, 'processInBackground').mockImplementation(() => undefined);
 
 const dbUrl = process.env.WHATSAPP_TEST_DATABASE_URL;
 const phone = '12345';
@@ -48,9 +52,9 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
   let agent: AgentsService;
   const send = vi.fn<WhatsAppCloudClient['send']>();
   const aiFetch = vi.fn();
+  let background = pauseBackground();
   const settings = {
-    WHATSAPP_AI_MODE: 'off', WHATSAPP_AI_DAILY_LIMIT: '10',
-    WHATSAPP_AI_OUTPUT_TOKENS: '128', WHATSAPP_AI_TIMEOUT_MS: '5000', WHATSAPP_ENABLED: 'true', WHATSAPP_PHONE_NUMBER_ID: phone, WHATSAPP_ACCESS_TOKEN: 'synthetic',
+    WHATSAPP_AI_MODE: 'off', WHATSAPP_AI_DAILY_LIMIT: '10', WHATSAPP_CONTEXT_MINUTES: '5', WHATSAPP_ENABLED: 'true', WHATSAPP_PHONE_NUMBER_ID: phone, WHATSAPP_ACCESS_TOKEN: 'synthetic',
     WHATSAPP_APP_SECRET: appSecret, WHATSAPP_VERIFY_TOKEN: verifyToken,
     WHATSAPP_SESSION_KEY: Buffer.alloc(32, 1).toString('base64'),
     WHATSAPP_ALLOWED_SENDERS: [sender, secondSender].join(','), WHATSAPP_WORKER_SECRET: workerSecret,
@@ -76,7 +80,7 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     agent = app.get(AgentsService);
     app.get(WhatsAppCloudClient).send = send;
     app.get(AiService).options = (_budget, knowledge) => ({
-      apiKey: 'synthetic', provider: 'openai', knowledge, fetchImpl: aiFetch,
+      apiKey: 'synthetic', provider: 'openrouter', model: 'org/model', knowledge, fetchImpl: aiFetch,
     });
     await new KnowledgeService(db).bootstrap();
   }, 45_000);
@@ -87,10 +91,11 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     send.mockReset().mockImplementation(async (_to, _body, ref) => ({ kind: 'accepted', id: 'out-' + ref }));
     aiFetch.mockReset().mockImplementation(async (_url: string, options: RequestInit) => {
       const call = JSON.parse(String(options.body));
-      const value = call.text.format.name === 'agent_route'
-        ? { agents: ['marketing'], clarify: false } : { tool: 'catalogo_publico' };
-      return new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message',
-        content: [{ type: 'output_text', text: JSON.stringify(value) }] }] }));
+      // El orquestador elige marketing; cada agente elige su primera herramienta permitida.
+      const tools: string[] = call.response_format.json_schema.schema.properties?.tool?.enum ?? [];
+      const value = call.response_format.json_schema.name === 'agent_route'
+        ? { agents: ['marketing'], clarify: false } : { tool: tools.includes('catalogo_publico') ? 'catalogo_publico' : tools[0] };
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] });
     });
     await db.query('TRUNCATE whatsapp_ai_budget, whatsapp_outbound, whatsapp_event, whatsapp_session RESTART IDENTITY');
   });
@@ -138,10 +143,8 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     expect((await db.query('SELECT wamid FROM whatsapp_event ORDER BY id')).map((r: { wamid: string }) => r.wamid)).toEqual(['a','b','c']);
     const http = request(app.getHttpServer());
     await http.post('/internal/whatsapp/jobs/process').set('Authorization','Bearer wrong').expect(401);
-    for (let n = 0; n < 3; n++) {
-      await http.post('/internal/whatsapp/jobs/process').set('Authorization','Bearer ' + workerSecret)
-        .expect(200, { processed: true });
-    }
+    await http.post('/internal/whatsapp/jobs/process').set('Authorization','Bearer ' + workerSecret)
+      .expect(200, { processed: 3 });
     expect(send).toHaveBeenCalledTimes(3);
     const rows = await db.query(`SELECT e.wamid,t.id_conversacion,c.canal FROM whatsapp_event e
       JOIN turno_tesi t ON t.id_turno=e.turn_id JOIN conversacion c USING(id_conversacion) ORDER BY e.id`);
@@ -150,6 +153,42 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     expect(rows[0].id_conversacion).not.toBe(rows[2].id_conversacion);
     expect(rows.every((row: { canal: string }) => row.canal === 'whatsapp')).toBe(true);
     expect(send.mock.calls[0][1]).toMatch(/Soy Tesi/);
+  });
+
+  it('answers any sender when the allow-list is empty and processes the queue right after the webhook', async () => {
+    vi.stubEnv('WHATSAPP_ALLOWED_SENDERS', '');
+    background.mockRestore();
+    try {
+      await webhook([change([message('open-sender', 'Hola', '10000000009')])]).expect(200);
+      await vi.waitFor(async () => expect(await db.query('SELECT state FROM whatsapp_event')).toEqual([{ state: 'done' }]), { timeout: 15_000 });
+      expect(send).toHaveBeenCalledOnce();
+      expect(send.mock.calls[0][0]).toBe('10000000009');
+    } finally {
+      background = pauseBackground();
+    }
+  });
+
+  it('uses the sender_id as identity: creates a buyer once and links an existing lead by phone', async () => {
+    vi.stubEnv('WHATSAPP_ALLOWED_SENDERS', '');
+    const newcomer = '10000000005', known = '10000000006';
+    await webhook([change([message('id-1', 'Hola', newcomer), message('id-2', 'Gracias', newcomer)])]).expect(200);
+    await worker.drain();
+    const [session] = await db.query('SELECT phone_number,id_buyer,id_lead FROM whatsapp_session WHERE sender_id=$1', [newcomer]);
+    expect(session).toMatchObject({ phone_number: '+' + newcomer, id_lead: null });
+    expect(await db.query('SELECT id_buyer,telefono,canal_origen FROM buyer WHERE telefono=$1', ['+' + newcomer]))
+      .toEqual([{ id_buyer: session.id_buyer, telefono: '+' + newcomer, canal_origen: 'whatsapp' }]);
+    const linked = await db.query(`SELECT DISTINCT a.id_buyer FROM whatsapp_event e
+      JOIN turno_tesi t ON t.id_turno=e.turn_id JOIN conversacion c USING(id_conversacion)
+      JOIN acceso_contacto a ON a.id_sesion=c.id_sesion WHERE e.wamid IN ('id-1','id-2')`);
+    expect(linked).toEqual([{ id_buyer: session.id_buyer }]);
+
+    const [lead] = await db.query(`INSERT INTO lead(nombres,telefono,id_estado)
+      VALUES('Lead existente',$1,(SELECT id_estado FROM estado_lead WHERE codigo='nuevo')) RETURNING id_lead`, ['+' + known]);
+    await webhook([change([message('id-3', 'Hola', known)])]).expect(200);
+    await worker.drain();
+    expect((await db.query('SELECT id_buyer,id_lead FROM whatsapp_session WHERE sender_id=$1', [known]))[0])
+      .toEqual({ id_buyer: null, id_lead: lead.id_lead });
+    expect(await db.query('SELECT id_buyer FROM buyer WHERE telefono=$1', ['+' + known])).toEqual([]);
   });
 
   it('excludes a second consumer for the same session while letting another session advance', async () => {
@@ -237,15 +276,15 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('checks expiry at send, redacts recognized private questions, and handles unsupported data explicitly', async () => {
+  it('checks the 24-hour window at send, omits credentials, and handles unsupported data explicitly', async () => {
     await webhook([change([message('expired','Hola',secondSender,86_401)])]).expect(200);
     await worker.run();
     expect(send).not.toHaveBeenCalled();
-    await webhook([change([message('private','Dime el saldo de mi contrato REF-PRIVADA'),
+    await webhook([change([message('secret','Mi contraseña es REF-PRIVADA'),
       message('long','a'.repeat(801)), { ...message('file'), type: 'document' }])]).expect(200);
     for (let n = 0; n < 3; n++) await worker.run();
     expect(send.mock.calls.map(call => call[1])).toEqual([
-      expect.stringMatching(/verificación de identidad/),
+      expect.stringMatching(/no compartas contraseñas/),
       expect.stringMatching(/800 caracteres/),
       expect.stringMatching(/consultas en texto/),
     ]);
@@ -264,7 +303,7 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     await worker.run();
     await worker.run();
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][1]).toBe('Un asesor revisará tu solicitud.');
+    expect(send.mock.calls[0][1]).toMatch(/asesor revisará tu solicitud/);
     const [row] = await db.query(`SELECT c.estado,a.estado AS request_state FROM whatsapp_event e
       JOIN turno_tesi t ON t.id_turno=e.turn_id JOIN conversacion c USING(id_conversacion)
       JOIN agente_solicitud a USING(id_conversacion) WHERE e.wamid='handoff'`);
@@ -273,18 +312,17 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     expect(app.get(AttentionService)).toBeDefined();
   });
 
-  it('cost: answers greetings, catalog, public resources and known packages with zero provider calls', async () => {
-    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
+  it('without AI answers greetings, catalog, public resources and known packages by rules', async () => {
     const packages = vi.spyOn(app.get(PackagesService), 'authorized').mockResolvedValue([{
-      idServicio: 9, codigo: 'PILOTO', nombre: 'Plan Brisa', descripcion: 'Orientaci\u00f3n sobre el servicio publicado.',
+      idServicio: 9, codigo: 'PILOTO', nombre: 'Plan Brisa', descripcion: 'Orientación sobre el servicio publicado.',
       publicoObjetivo: null, componentes: [], entregables: [], restricciones: [],
       precioFijo: '100.00', moneda: 'PEN', modalidad: 'virtual', duracionDias: null,
       vigenciaDesde: null, vigenciaHasta: null, version: 1,
     }] as Awaited<ReturnType<PackagesService['authorized']>>);
     try {
-      await webhook([change([message('hello-cost'), message('catalog-cost', '\u00bfQu\u00e9 servicios ofrecen?'),
+      await webhook([change([message('hello-cost'), message('catalog-cost', '¿Qué servicios ofrecen?'),
         message('resources-cost', 'Recursos gratuitos'), message('named-cost', 'Quiero saber del Plan Brisa')])]).expect(200);
-      for (let count = 0; count < 4; count++) await worker.run();
+      await worker.drain();
       expect(send.mock.calls.map(call => call[1])).toEqual([
         expect.stringContaining('Plan Brisa'), expect.stringContaining('Plan Brisa'),
         expect.stringMatching(/recursos publicados/i), expect.stringContaining('servicio publicado'),
@@ -296,67 +334,95 @@ describe.skipIf(!dbUrl)('WhatsApp with isolated PostgreSQL and simulated Meta', 
     }
   });
 
-  it('cost: uses local clarification when disabled and deterministic simulation without network', async () => {
-    await webhook([change([message('off-cost', 'Necesito orientaci\u00f3n para empezar'),
-      message('sim-cost', 'Me interesa una asesor\u00eda inicial')])]).expect(200);
-    await worker.run();
-    vi.stubEnv('WHATSAPP_AI_MODE', 'simulate');
-    await worker.run();
-    expect(send.mock.calls[0][1]).toContain('preguntas generales');
-    expect(send.mock.calls[1][1]).toContain('Soy Tesi');
-    expect(aiFetch).not.toHaveBeenCalled();
-    expect(await db.query('SELECT calls FROM whatsapp_ai_budget')).toEqual([]);
+  it('live: routes each message to the matching agent (marketing, cobranza, postventa)', async () => {
+    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
+    await webhook([change([message('mk', 'Necesito orientación para empezar'),
+      message('pay', '¿Qué modalidades de pago tienen?', secondSender)])]).expect(200);
+    await worker.drain();
+    const names = aiFetch.mock.calls.map(([, options]) => JSON.parse(String(options.body)).response_format.json_schema.name);
+    expect(names).toEqual(expect.arrayContaining(['agent_route', 'agent_marketing']));
+    const executions = await db.query(`SELECT e.wamid,x.agente FROM whatsapp_event e
+      JOIN agente_ejecucion x ON x.id_turno=e.turn_id ORDER BY e.id`);
+    expect(executions).toEqual([{ wamid: 'mk', agente: 'marketing' }, { wamid: 'pay', agente: 'cobranza' }]);
+    expect(await db.query('SELECT calls FROM whatsapp_ai_budget')).toEqual([{ calls: 2 }]);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
-  it('cost: reserves at most one daily attempt across concurrent sessions', async () => {
+  it('live: the negotiator qualifies the sender and moves the contact from buyer to lead in negotiation', async () => {
+    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
+    const text = 'Quiero contratar análisis estadístico, mi tesis está en desarrollo';
+    aiFetch.mockImplementation(async (_url: string, options: RequestInit) => {
+      const call = JSON.parse(String(options.body));
+      const name = call.response_format.json_schema.name;
+      const input = JSON.parse(call.messages[1].content);
+      const id = input.mensajes?.at(-1)?.idMensaje;
+      const evidence = (fragmento: string) => [{ idMensaje: id, fragmento }];
+      const value = name === 'tesi_comercial' ? {
+        campos: [
+          { nombre: 'necesidad', valor: 'análisis estadístico', tipo: 'declarado', evidencias: evidence('análisis estadístico') },
+          { nombre: 'etapa', valor: 'desarrollo', tipo: 'declarado', evidencias: evidence('desarrollo') },
+        ],
+        senales: [{ nombre: 'intencion_contratar', valor: 'true', tipo: 'inferido', evidencias: evidence('Quiero contratar') }],
+        objeciones: [],
+      } : { kind: 'business', name: null, university: null, degree: null, thesisStage: 'Desarrollo de tesis',
+        need: 'Análisis estadístico', deadline: null, service: null, intent: 'yes', human: false, objection: 'none',
+        reply: 'Puedo ayudarte con el análisis estadístico de tu tesis.', quickReplies: [] };
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] });
+    });
+    await webhook([change([message('buy', text)])]).expect(200);
+    await worker.drain();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toContain('análisis estadístico');
+    const [session] = await db.query('SELECT id_buyer,id_lead FROM whatsapp_session WHERE sender_id=$1', [sender]);
+    const [buyer] = await db.query('SELECT estado,id_lead FROM buyer WHERE id_buyer=$1', [session.id_buyer]);
+    expect(buyer.estado).toBe('lead');
+    const [lead] = await db.query(`SELECT l.telefono,e.codigo FROM lead l JOIN estado_lead e USING(id_estado) WHERE id_lead=$1`, [buyer.id_lead]);
+    expect(lead).toEqual({ telefono: '+' + sender, codigo: 'en_negociacion' });
+    expect(await db.query(`SELECT e.codigo,h.motivo,h.id_agente IS NOT NULL AS agente FROM lead_estado_historial h
+      JOIN estado_lead e USING(id_estado) WHERE h.id_lead=$1 ORDER BY h.id_historial`, [buyer.id_lead])).toEqual([
+      { codigo: 'nuevo', motivo: 'Tesi (WhatsApp): contacto convertido en lead', agente: false },
+      { codigo: 'en_negociacion', motivo: 'Tesi (WhatsApp): intención de contratar', agente: true },
+    ]);
+    // La siguiente vez que escribe, el sender_id ya resuelve al lead.
+    await webhook([change([message('buy-2', 'Gracias')])]).expect(200);
+    await worker.drain();
+    expect((await db.query('SELECT id_lead FROM whatsapp_session WHERE sender_id=$1', [sender]))[0].id_lead).toBe(buyer.id_lead);
+  });
+
+  it('live: keeps recent context and drops it after the configured minutes of silence', async () => {
+    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
+    const histories = () => aiFetch.mock.calls.map(([, options]) => JSON.parse(String(options.body)))
+      .filter(call => call.response_format.json_schema.name === 'agent_route')
+      .map(call => JSON.parse(call.messages[1].content).history.length);
+    await webhook([change([message('ctx-1', 'Necesito orientación para empezar')])]).expect(200);
+    await worker.drain();
+    await webhook([change([message('ctx-2', 'Necesito orientación con mi tema')])]).expect(200);
+    await worker.drain();
+    expect(histories()).toEqual([0, 2]);
+    await db.query("UPDATE mensaje SET enviado_en=enviado_en-interval '6 minutes'");
+    await webhook([change([message('ctx-3', 'Necesito orientación otra vez')])]).expect(200);
+    await worker.drain();
+    expect(histories()).toEqual([0, 2, 0]);
+  });
+
+  it('live: reserves at most the daily limit across concurrent sessions and answers the rest by rules', async () => {
     vi.stubEnv('WHATSAPP_AI_MODE', 'live');
     vi.stubEnv('WHATSAPP_AI_DAILY_LIMIT', '1');
-    vi.stubEnv('WHATSAPP_AI_OUTPUT_TOKENS', '96');
-    await webhook([change([message('concurrent-a', 'Necesito orientaci\u00f3n para empezar'),
-      message('concurrent-b', 'Me interesa asesor\u00eda inicial', secondSender)])]).expect(200);
+    await webhook([change([message('concurrent-a', 'Necesito orientación para empezar'),
+      message('concurrent-b', 'Me interesa asesoría inicial', secondSender)])]).expect(200);
     await Promise.all([worker.run(), worker.run()]);
-    expect(aiFetch).toHaveBeenCalledTimes(1);
-    const [, options] = aiFetch.mock.calls[0];
-    const requestBody = JSON.parse(String(options.body));
-    expect(requestBody.max_output_tokens).toBe(96);
-    expect(requestBody.text.format.name).toBe('agent_marketing');
-    expect(JSON.parse(requestBody.input)).not.toHaveProperty('history');
     expect(await db.query('SELECT calls FROM whatsapp_ai_budget')).toEqual([{ calls: 1 }]);
-    expect(send.mock.calls.map(call => call[1])).toEqual(expect.arrayContaining([
-      expect.stringContaining('Soy Tesi'), expect.stringContaining('preguntas generales'),
-    ]));
-  });
-
-  it('cost: falls back locally after a provider error without using the alternate provider', async () => {
-    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
-    const options = app.get(AiService).options;
-    const alternate = vi.fn<typeof fetch>().mockRejectedValue(new Error('Unexpected alternate'));
-    const spy = vi.spyOn(app.get(AiService), 'options').mockImplementation((...args) => ({
-      ...options(...args), fallbacks: [{ provider: 'gemini', apiKey: 'synthetic', fetchImpl: alternate }],
-    }));
-    try {
-      aiFetch.mockResolvedValueOnce(Response.json({ error: {} }, { status: 429 }));
-      await webhook([change([message('failure-cost', 'Necesito orientaci\u00f3n para empezar')])]).expect(200);
-      await worker.run();
-      expect(aiFetch).toHaveBeenCalledTimes(1);
-      expect(alternate).not.toHaveBeenCalled();
-      expect(send.mock.calls[0][1]).toContain('preguntas generales');
-      expect(await db.query('SELECT state,attempts FROM whatsapp_event')).toEqual([{ state: 'done', attempts: 1 }]);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it('cost: keeps private, out-of-scope and expired messages away from billable classification', async () => {
-    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
-    await webhook([change([message('private-cost', 'Necesito orientaci\u00f3n sobre mi contrato'),
-      message('outside-cost', 'Resume el partido de ayer'),
-      message('expired-cost', 'Necesito orientaci\u00f3n para empezar', secondSender, 86_401)])]).expect(200);
-    for (let count = 0; count < 3; count++) await worker.run();
-    expect(aiFetch).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls[0][1]).toContain('verificaci\u00f3n de identidad');
-    expect(await db.query('SELECT calls FROM whatsapp_ai_budget')).toEqual([]);
+    expect(send.mock.calls.map(call => call[1])).toEqual(expect.arrayContaining([expect.stringContaining('preguntas generales')]));
+  });
+
+  it('live: falls back to rules when every provider fails, without retrying the message', async () => {
+    vi.stubEnv('WHATSAPP_AI_MODE', 'live');
+    aiFetch.mockImplementation(async () => Response.json({ error: {} }, { status: 429 }));
+    await webhook([change([message('failure-cost', 'Necesito orientación para empezar')])]).expect(200);
+    await worker.drain();
+    expect(send.mock.calls[0][1]).toContain('preguntas generales');
+    expect(await db.query('SELECT state,attempts FROM whatsapp_event')).toEqual([{ state: 'done', attempts: 1 }]);
   });
 
 });

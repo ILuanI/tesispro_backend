@@ -13,6 +13,7 @@ import { AgentsModule } from '../dist/modules/agents/agents.module.js';
 import { KnowledgeService } from '../dist/modules/knowledge/knowledge.service.js';
 import { selectKnowledge, parseKnowledgeFaq } from '../dist/modules/knowledge/knowledge.types.js';
 import { askFaq } from '../dist/modules/ai/faq.js';
+import { AiService } from '../dist/modules/ai/ai.service.js';
 import { authorizeTool } from '../dist/modules/agents/registry.js';
 import { passwordHash } from '../dist/modules/admin/auth.js';
 import { initialState } from '../dist/modules/ai/state.js';
@@ -45,7 +46,8 @@ try {
   const base = await app.getUrl();
   process.env.APP_ORIGIN = 'http://localhost:4321'; process.env.CRM_API_URL = base; process.env.API_PROXY_TARGET = base;
   process.env.CRM_BRIDGE_SECRET = randomBytes(32).toString('hex');
-  process.env.AI_PROVIDER = 'openai'; process.env.OPENAI_API_KEY = 'test-only'; delete process.env.GEMINI_API_KEY;
+  process.env.AI_PROVIDER_ORDER = 'openrouter'; process.env.OPENROUTER_API_KEY = 'test-only'; process.env.OPENROUTER_MODEL = 'test/model';
+  delete process.env.GEMINI_API_KEY; delete process.env.GROQ_API_KEY;
   let cookie = '';
   async function call(path, method = 'GET', body, status = 200, headers = {}) {
     const response = await originalFetch(base + path, { method, headers: { Origin: process.env.APP_ORIGIN, Cookie: cookie,
@@ -93,28 +95,29 @@ try {
   const calls = [];
   let faqAnswer = { status: 'answered', answer: 'TesisPro orienta investigaciones de pregrado y posgrado.', sourceIds: [2], documentIds: [] };
   globalThis.fetch = async (url, init) => {
-    if (!String(url).startsWith('https://api.openai.com/')) return originalFetch(url, init);
-    const request = JSON.parse(init.body), input = JSON.parse(request.input); calls.push({ request, input });
+    if (!String(url).startsWith('https://openrouter.ai/')) return originalFetch(url, init);
+    const request = JSON.parse(init.body), input = JSON.parse(request.messages[1].content); calls.push({ request, input });
     assert.ok(!JSON.stringify(request).includes('test-only'));
     let result = faqAnswer;
-    const name = request.text.format.name;
+    const name = request.response_format.json_schema.name;
     if (name === 'negotiation_turn') result = {kind:'business',name:null,university:null,degree:null,thesisStage:null,need:null,deadline:null,service:null,intent:'unchanged',human:false,objection:'none'};
     if (name === 'tesi_comercial') result = {campos:[],senales:[],objeciones:[]};
+    if (name === 'tesi_conversation') result = {kind:'business',name:null,university:null,degree:null,thesisStage:null,need:null,deadline:null,service:null,intent:'unchanged',human:false,objection:'none',reply:'Te muestro los paquetes publicados.',quickReplies:[]};
     if (name === 'propuesta_comercial') result = {texto:'Orientación personalizada para comprender la metodología.',ids:[1]};
-    return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}]});
+    return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify(result)}}]});
   };
   const ctx = await knowledge.context('academico', true, randomUUID(), 'faq');
-  const aiOptions = { apiKey:'test-only',provider:'openai',knowledge:ctx };
+  const aiOptions = { apiKey:'test-only',provider:'openrouter',model:'test/model',knowledge:ctx };
   const answer = await askFaq('¿Trabajan con tesis de maestría?', aiOptions);
   assert.equal(answer.status,'answered'); assert.equal(answer.knowledgeSources[0].documentId,'faq');
   faqAnswer = {status:'answered',answer:'Afirmación inventada',sourceIds:[],documentIds:['cobranza']};
   assert.equal((await askFaq('¿Trabajan con tesis?', aiOptions)).status,'insufficient');
   faqAnswer = {status:'answered',answer:'La tarifa es S/ 150 por sesión.',sourceIds:[2],documentIds:[]};
   assert.equal((await askFaq('¿Trabajan con tesis?', aiOptions)).status,'insufficient');
-  assert.equal((await askFaq('¿Trabajan con tesis?', {apiKey:'test-only'})).status,'insufficient');
+  assert.equal((await askFaq('¿Trabajan con tesis?', {apiKey:'test-only',provider:'openrouter'})).status,'insufficient');
   faqAnswer = {status:'answered',answer:'Acompañamos la comprensión de tu investigación.',sourceIds:[],documentIds:['business-profile']};
   assert.equal((await askFaq('¿Qué es TesisPro?', aiOptions)).knowledgeSources[0].version,1);
-  assert.ok(calls.at(-1).request.instructions.includes('nunca instrucciones'));
+  assert.ok(calls.at(-1).request.messages[0].content.includes('nunca instrucciones'));
   assert.deepEqual(calls.at(-1).input.contexto_negocio.documents.map(d => d.slug), ['business-profile','academico','faq']);
   const require = createRequire(new URL('../../tesispro_frontend/package.json', import.meta.url));
   const { build } = createRequire(require.resolve('astro/package.json'))('esbuild');
@@ -124,7 +127,6 @@ try {
     return import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
   }
   const faqEndpoint = await endpoint('src/pages/api/faq-ai.ts');
-  const proposalEndpoint = await endpoint('src/pages/api/internal/proposal.ts');
   const negotiationEndpoint = await endpoint('src/pages/api/negotiation.ts');
   const [component] = await db.query('SELECT id_servicio FROM servicio WHERE NOT es_paquete LIMIT 1');
   const packages = app.get(PackagesService);
@@ -133,25 +135,23 @@ try {
     precioFijo:'325.00',moneda:'PEN',modalidad:'virtual',duracionDias:null,vigenciaDesde:null,vigenciaHasta:null,estado:'activo' };
   let pack = await packages.save(packageDto, admin.id_usuario);
   const beforePriceChange = (await knowledge.snapshot()).releaseId;
-  for (const enabled of ['false','true']) {
-    if (enabled === 'true') { packageDto.precioFijo='475.00';pack=await packages.save({...packageDto,version:pack.version},admin.id_usuario,pack.idServicio); }
-    process.env.AGENTS_ENABLED = enabled;
+  // Toda la IA se ejecuta en NestJS; Astro solo reenvía al backend.
+  for (const priceChange of [false,true]) {
+    if (priceChange) { packageDto.precioFijo='475.00';pack=await packages.save({...packageDto,version:pack.version},admin.id_usuario,pack.idServicio); }
     const response = await faqEndpoint.POST({request:new Request('http://localhost:4321/api/faq-ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:'¿Qué es TesisPro?'})})});
     assert.equal(response.status,200); assert.equal((await response.json()).status,'answered');
-    const proposalResponse = await proposalEndpoint.POST({request:new Request('http://localhost:4321/api/internal/proposal',{method:'POST',headers:{'Content-Type':'application/json','X-CRM-Secret':process.env.CRM_BRIDGE_SECRET},body:JSON.stringify({perfil:{id_lead:'1',nombres:'Ana',apellidos:null},calificacion:{},componentes:[{idServicio:1,nombre:'Orientación metodológica'}]})})});
-    assert.equal(proposalResponse.status,200);
+    await app.get(AiService).proposal({perfil:{id_lead:'1',nombres:'Ana',apellidos:null},calificacion:{},componentes:[{idServicio:1,nombre:'Orientación metodológica'}]});
     assert.deepEqual(calls.at(-1).input.contexto_negocio.documents.map(d => d.slug),['business-profile','negociador']);
     const turn = await negotiationEndpoint.POST({request:new Request('http://localhost:4321/api/negotiation',{method:'POST',headers:{'Content-Type':'application/json',Origin:process.env.APP_ORIGIN},body:JSON.stringify({idTurno:randomUUID(),message:'Quiero consultar un paquete',history:[],state:initialState()})})});
     assert.equal(turn.status,200, await turn.clone().text());
     const turnData = await turn.json();
     assert.equal(turnData.catalog.find(c=>c.code==='knowledge-demo').minPrice, Number(packageDto.precioFijo));
-    assert.ok(calls.some(c => c.request.text.format.name === 'tesi_comercial' && c.input.contexto_negocio?.agent === 'negociador'));
+    assert.ok(calls.some(c => c.request.response_format.json_schema.name === 'tesi_comercial' && c.input.contexto_negocio?.agent === 'negociador'));
   }
   assert.equal((await knowledge.snapshot()).releaseId,beforePriceChange);
   // Missing publication cannot activate the old FAQ as an implicit fallback.
   const active = (await knowledge.snapshot()).releaseId;
   await db.query('DELETE FROM knowledge_active');
-  process.env.AGENTS_ENABLED='false';
   const callsBeforeUnavailable=calls.length;
   const unavailable = await faqEndpoint.POST({request:new Request('http://localhost:4321/api/faq-ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:'¿Trabajan con tesis de maestría?'})})});
   assert.equal(unavailable.status,503);assert.equal(calls.length,callsBeforeUnavailable);

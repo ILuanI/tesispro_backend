@@ -33,12 +33,13 @@ try {
   app=await NestFactory.create(Root,{logger:false});await app.init();
   const service=app.get(AgentsService), capture=app.get(CaptureProfileService), attention=app.get(AttentionService);
   // No real provider calls or customer communications.
-  app.get(AiService).options=(_budget,knowledge)=>({apiKey:'test',provider:'openai',knowledge,fetchImpl:async(_url,request)=>{
-    const input=JSON.parse(request.body), name=input.text.format.name;
+  app.get(AiService).options=(_budget,knowledge)=>({apiKey:'test',provider:'openrouter',model:'test/model',knowledge,fetchImpl:async(_url,request)=>{
+    const input=JSON.parse(request.body), name=input.response_format.json_schema.name;
     let result={status:'answered',answer:'Consulta el contexto aprobado sobre tu tesis.',sourceIds:[1]};
     if(name==='negotiation_turn') result={kind:'business',name:null,university:null,degree:null,thesisStage:null,need:null,deadline:null,service:null,intent:'unchanged',human:false,objection:'none'};
     if(name==='tesi_comercial') result={campos:[],senales:[],objeciones:[]};
-    return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}]}));
+    if(name==='tesi_conversation') result={kind:'business',name:null,university:null,degree:null,thesisStage:null,need:null,deadline:null,service:null,intent:'unchanged',human:false,objection:'none',reply:'Te muestro las opciones publicadas.',quickReplies:[]};
+    return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify(result)}}]});
   }});
   const make=message=>({idTurno:randomUUID(),message,history:[],state:initialState()});
   const first=make('Hola'), hello=await service.turn(first,'');
@@ -107,7 +108,7 @@ try {
     process.env.CRM_BRIDGE_SECRET=randomBytes(32).toString('hex');
     await db.query('UPDATE usuario_interno SET password_hash=$2 WHERE id_usuario=$1',[admin.id_usuario,await passwordHash('agents-browser-test')]);
     const frontend=fileURLToPath(new URL('../../tesispro_frontend/',import.meta.url));
-    web=spawn(process.execPath,['dist/server/entry.mjs'],{cwd:frontend,windowsHide:true,stdio:'ignore',env:{...process.env,HOST:'127.0.0.1',PORT:'44329',AGENTS_ENABLED:'true',CRM_API_URL:backend,API_PROXY_TARGET:backend}});
+    web=spawn(process.execPath,['dist/server/entry.mjs'],{cwd:frontend,windowsHide:true,stdio:'ignore',env:{...process.env,HOST:'127.0.0.1',PORT:'44329',CRM_API_URL:backend,API_PROXY_TARGET:backend}});
     let ready=false;
     for(let i=0;i<80;i++){try {if((await fetch(origin)).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}
     assert(ready,'Astro did not start');

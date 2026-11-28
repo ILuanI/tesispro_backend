@@ -5,6 +5,8 @@ export const publicPackageSchema = z.object({
   nombre: z.string().max(150),
   descripcion: z.string().max(3000),
   publicoObjetivo: z.string().nullable(),
+  guiaRecomendacion: z.string().max(16000).nullable().optional(),
+  prestaciones: z.array(z.string().max(1000)).max(50).optional(),
   componentes: z
     .array(
       z.object({
@@ -40,6 +42,8 @@ export interface NegotiationService {
   code?: string;
   deliverables?: string[];
   restrictions?: string[];
+  recommendationGuide?: string;
+  benefits?: string[];
 }
 export function packageServices(
   packages: PublicPackage[],
@@ -50,13 +54,14 @@ export function packageServices(
     code: p.codigo,
     version: p.version,
     commercialDescription: [
-      p.descripcion.slice(0, 350),
+      p.descripcion,
+      ...(p.publicoObjetivo ? [`Dirigido a: ${p.publicoObjetivo}`] : []),
+      ...(p.prestaciones?.length ? [`Incluye: ${p.prestaciones.join('; ')}`] : []),
       `Servicios: ${p.componentes
         .map((c) => `${c.nombre} (${c.cantidad})`)
-        .join(", ")
-        .slice(0, 250)}`,
-      `Entregables: ${p.entregables.join("; ").slice(0, 350)}`,
-      `Restricciones: ${p.restricciones.join("; ").slice(0, 350)}`,
+        .join(", ")}`,
+      `Entregables: ${p.entregables.join("; ")}`,
+      `Restricciones: ${p.restricciones.join("; ")}`,
       `Modalidad: ${p.modalidad}.${p.duracionDias ? ` Duración configurada: ${p.duracionDias} días.` : ""} Resumen sujeto al alcance completo del paquete.`,
     ].join("\n"),
     minPrice: Number(p.precioFijo),
@@ -65,7 +70,9 @@ export function packageServices(
     unit: "por paquete",
     currency: p.moneda,
     deliverables: p.entregables,
+    benefits: p.prestaciones || [],
     restrictions: p.restricciones,
-    condition: `Catálogo autorizado · ${p.codigo} · versión ${p.version}. Sujeto a evaluación humana y formalización; no garantiza resultados académicos.`,
+    recommendationGuide: p.guiaRecomendacion || undefined,
+    condition: `Modalidad ${p.modalidad}${p.duracionDias ? ` · ${p.duracionDias} días de acompañamiento` : ''}`,
   }));
 }

@@ -12,9 +12,10 @@ export class WhatsAppJobsController {
   @HttpCode(200)
   async process(@Headers('authorization') authorization = '') {
     const { workerSecret } = this.config.get();
-    if (!authorization.startsWith('Bearer ') || !sameSecret(authorization.slice(7), workerSecret)) {
+    if (!workerSecret || !authorization.startsWith('Bearer ') || !sameSecret(authorization.slice(7), workerSecret)) {
       throw new UnauthorizedException();
     }
-    return this.worker.run();
+    // Opcional: un cron externo puede llamar aquí para reintentar envíos pendientes.
+    return this.worker.drain();
   }
 }

@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { DataSource, type EntityManager } from 'typeorm';
+import { ConflictException } from '@nestjs/common';
 import { CaptureProfileService } from '../admin/capture-profile.service.js';
+import { ContactIdentityService } from '../admin/contact-identity.service.js';
 import type { DeliveryStatus, Incoming } from './whatsapp-webhook.schema.js';
 import { sealSessionToken, unsealSessionToken, WhatsAppConfig } from './whatsapp.config.js';
 import type { SendResult } from './whatsapp-cloud.client.js';
@@ -31,6 +33,7 @@ export class WhatsAppEventsService {
     private readonly db: DataSource,
     private readonly capture: CaptureProfileService,
     private readonly config: WhatsAppConfig,
+    private readonly identity: ContactIdentityService,
   ) {}
 
   async persist(phone: string, incoming: Incoming[], statuses: DeliveryStatus[]) {
@@ -40,10 +43,12 @@ export class WhatsAppEventsService {
       const sessions = new Map<string, string>();
       for (const sender of [...new Set(incoming.map(event => event.sender))].sort()) {
         const first = incoming.find(event => event.sender === sender)!;
+        const number = incoming.find(event => event.sender === sender && event.phone)?.phone ?? null;
         const [session] = await m.query(`
-          INSERT INTO whatsapp_session(phone_id,sender_id,last_inbound_at) VALUES($1,$2,$3)
-          ON CONFLICT(phone_id,sender_id) DO UPDATE SET sender_id=excluded.sender_id RETURNING id
-        `, [phone, sender, first.receivedAt]);
+          INSERT INTO whatsapp_session(phone_id,sender_id,last_inbound_at,phone_number) VALUES($1,$2,$3,$4)
+          ON CONFLICT(phone_id,sender_id) DO UPDATE
+            SET phone_number=coalesce(excluded.phone_number, whatsapp_session.phone_number) RETURNING id
+        `, [phone, sender, first.receivedAt, number]);
         sessions.set(sender, session.id);
       }
       for (const event of incoming) {
@@ -127,6 +132,7 @@ export class WhatsAppEventsService {
         await m.query('UPDATE whatsapp_session SET sealed_contact_token=$2 WHERE id=$1',
           [head.session_id, sealSessionToken(contact.token, sessionKey, scope)]);
       }
+      await this.linkContact(m, head.session_id, contact);
       const lease = randomUUID();
       await m.query(`
         UPDATE whatsapp_event SET state='processing', lease_id=$2,
@@ -135,6 +141,47 @@ export class WhatsAppEventsService {
       return { ...head, lease_id: lease, attempts: head.attempts + 1,
         contact_token: contact.token, id_sesion: contact.id_sesion };
     });
+  }
+
+  /**
+   * El sender_id identifica al contacto: la sesión de WhatsApp guarda su buyer o lead.
+   * Si aún no tiene uno, se busca por teléfono y, si no existe, se crea un buyer
+   * (canal WhatsApp). Un buyer ya convertido se sigue hasta su lead.
+   */
+  private async linkContact(m: EntityManager, sessionId: string, contact: any) {
+    const [ws] = await m.query('SELECT phone_number,id_buyer,id_lead FROM whatsapp_session WHERE id=$1', [sessionId]);
+    let lead: string | null = ws.id_lead, buyer: string | null = ws.id_buyer;
+    if (!lead && buyer) {
+      const [converted] = await m.query('SELECT id_lead FROM buyer WHERE id_buyer=$1', [buyer]);
+      lead = converted?.id_lead ?? null;
+    }
+    if (!lead && !buyer) { lead = contact.id_lead; buyer = contact.id_buyer; }
+    if (!lead && !buyer && ws.phone_number) {
+      try {
+        const owner = await this.identity.resolve(m, null, ws.phone_number);
+        lead = owner?.id_lead ?? null;
+        buyer = owner?.id_buyer ?? null;
+      } catch (error) {
+        // Datos de contacto en conflicto: requieren revisión administrativa; se atiende sin vincular.
+        if (!(error instanceof ConflictException)) throw error;
+        return;
+      }
+      if (!lead && !buyer) {
+        const [created] = await m.query(
+          "INSERT INTO buyer(telefono,canal_origen,motivo_captacion,procedencia_campos) VALUES($1,'whatsapp','consulta_general',$2::jsonb) RETURNING id_buyer",
+          [ws.phone_number, JSON.stringify({ telefono: { origen: 'whatsapp', confirmado: true, fecha: new Date().toISOString() } })],
+        );
+        buyer = created.id_buyer;
+      }
+    }
+    if (!lead && !buyer) return;
+    await m.query('UPDATE whatsapp_session SET id_buyer=$2,id_lead=$3 WHERE id=$1', [sessionId, buyer, lead]);
+    if (String(contact.id_lead ?? '') === String(lead ?? '') && String(contact.id_buyer ?? '') === String(buyer ?? '')) return;
+    try {
+      await this.capture.bind(m, contact, buyer ?? contact.id_buyer ?? null, lead);
+    } catch (error) {
+      if (!(error instanceof ConflictException)) throw error;
+    }
   }
 
   private async owned(m: EntityManager, job: WhatsAppJob) {

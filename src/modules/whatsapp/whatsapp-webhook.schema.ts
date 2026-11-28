@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { senderId } from './whatsapp.config.js';
+import { senderAllowed, senderId } from './whatsapp.config.js';
 
 const message = z.object({
   id: z.string().min(1).max(512),
@@ -30,6 +30,8 @@ export type DeliveryStatus = z.infer<typeof status>;
 export type Incoming = {
   wamid: string;
   sender: string;
+  /** Número E.164 si Meta lo incluye; con IDs de usuario de WhatsApp puede faltar. */
+  phone: string | null;
   receivedAt: Date;
   body: string | null;
   format: 'text' | 'too_long' | 'unsupported';
@@ -71,8 +73,8 @@ export function parseWebhook(body: unknown, phone: string, allowed: string[], no
           ? from_user_id !== undefined ? 'both' : 'fromOnly'
           : from_user_id !== undefined ? 'fromUserIdOnly' : 'neither';
         diagnostics.senderFields[presence]++;
-        const phoneMatches = typeof from === 'string' && allowed.includes(from);
-        const userMatches = typeof from_user_id === 'string' && allowed.includes(from_user_id);
+        const phoneMatches = typeof from === 'string' && senderAllowed(allowed, from);
+        const userMatches = typeof from_user_id === 'string' && senderAllowed(allowed, from_user_id);
         if (phoneMatches) diagnostics.senderMatches.from++;
         if (userMatches) diagnostics.senderMatches.fromUserId++;
         if (phoneMatches || userMatches) diagnostics.senderMatches.either++;
@@ -96,7 +98,8 @@ export function parseWebhook(body: unknown, phone: string, allowed: string[], no
           continue;
         }
         const data = parsed.data;
-        const sender = [data.from_user_id, data.from].find(value => value && allowed.includes(value));
+        // sender_id: el ID de usuario de WhatsApp si existe; si no, el número.
+        const sender = [data.from_user_id, data.from].find(value => value && senderAllowed(allowed, value));
         const time = Number(data.timestamp) * 1000;
         if (!sender) {
           diagnostics.discarded[data.from || data.from_user_id ? 'senderNotAllowed' : 'missingSender']++;
@@ -109,7 +112,7 @@ export function parseWebhook(body: unknown, phone: string, allowed: string[], no
         const body = data.type === 'text' ? data.text?.body.trim() : undefined;
         const format = !body ? 'unsupported' : body.length > 800 ? 'too_long' : 'text';
         incoming.push({
-          wamid: data.id, sender, receivedAt: new Date(Math.min(time, now)),
+          wamid: data.id, sender, phone: data.from && /^\d{8,15}$/.test(data.from) ? `+${data.from}` : null, receivedAt: new Date(Math.min(time, now)),
           body: format === 'text' ? body! : null, format,
         });
       }

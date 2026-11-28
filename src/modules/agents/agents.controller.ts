@@ -7,7 +7,7 @@ import { cookieToken } from '../admin/capture-profile.service.js';
 import { AgentsService } from './agents.service.js';
 import { AttentionService } from './attention.service.js';
 import { AiService } from '../ai/ai.service.js';
-import { askFaq, questionSchema } from '../ai/faq.js';
+import { askFaq, localAnswer, questionSchema } from '../ai/faq.js';
 
 export function checkSecret(given:string, expected=process.env.CRM_BRIDGE_SECRET || '') {
   const hash=(s:string)=>createHash('sha256').update(s).digest();
@@ -29,6 +29,9 @@ export class AgentsController {
     checkSecret(String(req.headers['x-crm-secret'] || ''));
     const input=questionSchema.safeParse(body);
     if(!input.success) throw new BadRequestException('Pregunta inválida.');
+    // Respuestas instantáneas por reglas: no consultan la base de conocimiento ni la IA.
+    const local=localAnswer(input.data.question);
+    if(local) return local;
     const knowledge = await this.ai.knowledge.context('academico', true, randomUUID(), 'faq');
     return askFaq(input.data.question,this.ai.options(undefined, knowledge));
   }

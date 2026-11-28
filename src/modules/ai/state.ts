@@ -36,6 +36,7 @@ export function proposal(state: NegotiationState, catalog?:readonly NegotiationS
   const max = Math.round(service.maxPrice * 100 * (1 - discount / 100))/100;
   const money = (value: number) => !service.currency || service.currency==='PEN' ? `S/${value.toLocaleString('en-US')}` : new Intl.NumberFormat('es-PE',{style:'currency',currency:service.currency}).format(value);
   return { service: service.id, name: service.name, min, max, discount, condition: service.condition||proposalCondition,
+    benefits: service.benefits || [], deliverables: service.deliverables || [],
     text: `${min === max ? money(min) : `${money(min)}–${money(max)}`} ${service.unit}${discount ? ' · reducción provisional del 10%' : ''}` };
 }
 export function qualifyStage(state: NegotiationState, objection = false): NegotiationState['stage'] {

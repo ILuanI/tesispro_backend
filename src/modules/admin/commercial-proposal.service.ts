@@ -8,16 +8,8 @@ import { CommercialServiceDto, ProposalActionDto, ProposalDraftDto } from './com
 @Injectable()
 export class CommercialProposalService {
   constructor(private readonly db: DataSource, private readonly packages: PackagesService, private readonly ai: AiService) {}
-  private async generateText(input: unknown) {
-    if (process.env.AGENTS_ENABLED === 'true') return this.ai.proposal(input);
-    const secret = process.env.CRM_BRIDGE_SECRET || '';
-    if (secret.length < 32) throw new ServiceUnavailableException('Integración de IA no configurada.');
-    const response = await fetch(process.env.R8_AI_URL || 'http://localhost:4321/api/internal/proposal', {
-      method:'POST', headers:{'Content-Type':'application/json','X-CRM-Secret':secret},
-      body:JSON.stringify(input), signal:AbortSignal.timeout(30000),
-    });
-    if (!response.ok) throw new ServiceUnavailableException('No se pudo generar la propuesta.');
-    return response.json();
+  private generateText(input: unknown) {
+    return this.ai.proposal(input);
   }
   async catalog() {
     const legacy = await this.packages.isExistingCatalog();
